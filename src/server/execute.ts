@@ -1,0 +1,659 @@
+import fs from "node:fs/promises";
+import type {
+  AdapterExecutionContext,
+  AdapterExecutionResult,
+} from "../types.js";
+import {
+  asNumber,
+  asString,
+  asStringArray,
+  renderTemplate,
+  DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
+} from "./utils.js";
+import { DEFAULT_OLLAMA_HOST, DEFAULT_OLLAMA_MODEL } from "../index.js";
+import {
+  getIpLocation,
+  IP_LOCATION_TOOL_DEFINITION,
+} from "./tools/ip-location.js";
+import {
+  GENERIC_API_TOOLS,
+  handleCallApiEndpoint,
+  handleQueryGraphQL,
+  handleInspectApiDocs,
+} from "./tools/custom-endpoint.js";
+import {
+  OMNIA_TOOLS,
+  executeOmniaOperation,
+  parseOmniaPermissions,
+} from "./tools/omnia.js";
+import { loadOpenApiSpec, formatOpenApiDocs } from "./tools/openapi.js";
+import {
+  handleSetTaskTitle,
+  markIssueDone,
+} from "./tools/paperclip-task.js";
+
+interface ToolCall {
+  id?: string;
+  type?: string;
+  function: {
+    name: string;
+    arguments: Record<string, unknown> | string;
+  };
+}
+
+interface OllamaChatMessage {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string;
+  tool_calls?: ToolCall[];
+}
+
+interface OllamaStreamChunk {
+  model?: string;
+  created_at?: string;
+  message?: {
+    role?: string;
+    content?: string;
+    tool_calls?: ToolCall[];
+  };
+  done?: boolean;
+  done_reason?: string;
+  total_duration?: number;
+  load_duration?: number;
+  prompt_eval_count?: number;
+  eval_count?: number;
+  eval_duration?: number;
+  error?: string;
+}
+
+function resolveHost(config: Record<string, unknown>): string {
+  const custom = asString(config.baseUrl || config.host || process.env.OLLAMA_HOST, DEFAULT_OLLAMA_HOST).trim();
+  return custom.replace(/\/$/, "");
+}
+
+function resolveModel(config: Record<string, unknown>): string {
+  const model = asString(config.model, DEFAULT_OLLAMA_MODEL).trim();
+  return model.length > 0 ? model : DEFAULT_OLLAMA_MODEL;
+}
+
+function buildOllamaOptions(config: Record<string, unknown>): Record<string, unknown> {
+  const options: Record<string, unknown> = {};
+
+  if (config.temperature !== undefined && config.temperature !== "") {
+    options.temperature = asNumber(config.temperature, 0.8);
+  }
+  if (config.top_p !== undefined && config.top_p !== "") {
+    options.top_p = asNumber(config.top_p, 0.9);
+  }
+  if (config.top_k !== undefined && config.top_k !== "") {
+    options.top_k = asNumber(config.top_k, 40);
+  }
+  if (config.min_p !== undefined && config.min_p !== "") {
+    options.min_p = asNumber(config.min_p, 0.05);
+  }
+  if (config.num_ctx !== undefined && config.num_ctx !== "") {
+    options.num_ctx = asNumber(config.num_ctx, 4096);
+  }
+  if (config.num_predict !== undefined && config.num_predict !== "") {
+    options.num_predict = asNumber(config.num_predict, 2048);
+  }
+  if (config.repeat_penalty !== undefined && config.repeat_penalty !== "") {
+    options.repeat_penalty = asNumber(config.repeat_penalty, 1.1);
+  }
+  if (config.repeat_last_n !== undefined && config.repeat_last_n !== "") {
+    options.repeat_last_n = asNumber(config.repeat_last_n, 64);
+  }
+  if (config.presence_penalty !== undefined && config.presence_penalty !== "") {
+    options.presence_penalty = asNumber(config.presence_penalty, 0.0);
+  }
+  if (config.frequency_penalty !== undefined && config.frequency_penalty !== "") {
+    options.frequency_penalty = asNumber(config.frequency_penalty, 0.0);
+  }
+  if (config.mirostat !== undefined && config.mirostat !== "") {
+    options.mirostat = asNumber(config.mirostat, 0);
+  }
+  if (config.mirostat_tau !== undefined && config.mirostat_tau !== "") {
+    options.mirostat_tau = asNumber(config.mirostat_tau, 5.0);
+  }
+  if (config.mirostat_eta !== undefined && config.mirostat_eta !== "") {
+    options.mirostat_eta = asNumber(config.mirostat_eta, 0.1);
+  }
+  if (config.seed !== undefined && config.seed !== null && config.seed !== "") {
+    options.seed = asNumber(config.seed, 0);
+  }
+  if (config.stop !== undefined && config.stop !== null) {
+    if (Array.isArray(config.stop)) {
+      options.stop = asStringArray(config.stop);
+    } else if (typeof config.stop === "string" && config.stop.trim().length > 0) {
+      options.stop = config.stop.split(",").map((s) => s.trim()).filter(Boolean);
+    }
+  }
+  if (config.num_thread !== undefined && config.num_thread !== "") {
+    const thread = asNumber(config.num_thread, 0);
+    if (thread > 0) options.num_thread = thread;
+  }
+  if (config.num_gpu !== undefined && config.num_gpu !== "") {
+    options.num_gpu = asNumber(config.num_gpu, -1);
+  }
+
+  return options;
+}
+
+function cleanRawPaperclipTaskMarkdown(raw: string): string {
+  let cleaned = raw;
+  cleaned = cleaned.replace(/Paperclip task context:[\s\S]*?do not treat it as permission[^\n]*\n+/i, "");
+  cleaned = cleaned.replace(/Task question guidance:[\s\S]*?without repeating their reminders\.\n+/i, "");
+  cleaned = cleaned.replace(/Task clarification directive:[\s\S]*?without asking for the same information again\.\n+/i, "");
+  cleaned = cleaned.replace(/Task title directive:[\s\S]*?if retrying with changed arguments\.\n+/i, "");
+  cleaned = cleaned.replace(/External chat file delivery:[\s\S]*?(never claim it was sent\.|never repeat a successful upload merely to confirm it\.)\n+/i, "");
+  cleaned = cleaned.replace(/Follow-up directive:[\s\S]*?Reuse completed work rather than repeating it\.\n+/i, "");
+  cleaned = cleaned.replace(/Use this task context as the current assignment\.\s*$/i, "");
+  return cleaned.trim() || raw.trim();
+}
+
+function buildCleanUserPrompt(context: Record<string, unknown>, rawTaskFallback: string): string {
+  const issue =
+    typeof context.paperclipIssue === "object" && context.paperclipIssue !== null
+      ? (context.paperclipIssue as Record<string, unknown>)
+      : null;
+
+  const wakeComment =
+    typeof context.paperclipWakeComment === "object" && context.paperclipWakeComment !== null
+      ? asString((context.paperclipWakeComment as Record<string, unknown>).body, "").trim()
+      : "";
+
+  const wakeComments = Array.isArray(context.wakeComments) ? context.wakeComments : [];
+  const latestWake =
+    wakeComment ||
+    (wakeComments.length > 0
+      ? asString((wakeComments[wakeComments.length - 1] as Record<string, unknown>)?.body, "").trim()
+      : "");
+
+  if (issue) {
+    const identifier = asString(issue.identifier, "").trim();
+    const title = asString(issue.title, "").trim();
+    const description = asString(issue.description, "").trim();
+
+    const parts: string[] = [];
+    if (identifier && title && identifier !== title) {
+      parts.push(`Task: [${identifier}] ${title}`);
+    } else if (identifier) {
+      parts.push(`Task: ${identifier}`);
+    } else if (title) {
+      parts.push(`Task: ${title}`);
+    }
+
+    if (description) {
+      parts.push(`Description:\n${description}`);
+    }
+
+    if (latestWake && latestWake !== description) {
+      parts.push(`Latest user message:\n${latestWake}`);
+    }
+
+    if (parts.length > 0) {
+      return parts.join("\n\n");
+    }
+  }
+
+  if (rawTaskFallback) {
+    return cleanRawPaperclipTaskMarkdown(rawTaskFallback);
+  }
+
+  const wakeReason = asString(context.wakeReason, "").trim();
+  return wakeReason
+    ? `Wake reason: ${wakeReason}. Check in and proceed with your current objectives.`
+    : "Check in and proceed with your current objectives.";
+}
+
+export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
+  const { config, context, agent, runtime, onLog, onDispatch } = ctx;
+
+  // Merge agent adapterConfig, context overrides, and runtime config to guarantee that
+  // any security mode or parameter configured via UI or API is 100% authoritative.
+  const effectiveConfig: Record<string, unknown> = {
+    ...(agent?.adapterConfig as Record<string, unknown> || {}),
+    ...(context?.adapterConfig as Record<string, unknown> || {}),
+    ...config,
+  };
+
+  const host = resolveHost(effectiveConfig);
+  const model = resolveModel(effectiveConfig);
+  const options = buildOllamaOptions(effectiveConfig);
+  const keepAlive = asString(effectiveConfig.keep_alive, "15m").trim();
+  const timeoutSec = asNumber(effectiveConfig.timeoutSec, 0);
+
+  const issueId = asString(
+    context.issueId ||
+    (typeof context.paperclipIssue === "object" && context.paperclipIssue !== null
+      ? (context.paperclipIssue as Record<string, unknown>).id
+      : "") ||
+    runtime.taskKey,
+    "",
+  ).trim();
+  const apiUrl = asString(process.env.PAPERCLIP_API_URL, "http://127.0.0.1:3100");
+  const authToken = asString(ctx.authToken || context.authToken, "");
+
+  // 1. Gather instructions / system prompt
+  let systemPrompt = asString(config.system, "").trim();
+  const instructionsPath = asString(config.instructionsFilePath, "").trim();
+  if (instructionsPath) {
+    try {
+      const instructionsContent = await fs.readFile(instructionsPath, "utf-8");
+      if (instructionsContent.trim()) {
+        systemPrompt = systemPrompt
+          ? `${systemPrompt}\n\n---\n\n${instructionsContent.trim()}`
+          : instructionsContent.trim();
+      }
+    } catch (err) {
+      await onLog("stderr", `[ollama_local] Warning: Could not read instructions file ${instructionsPath}: ${err}\n`);
+    }
+  }
+
+  // 2. Build clean user prompt from context
+  const payloadPrompt = typeof context.payload === "object" && context.payload !== null
+    ? asString((context.payload as Record<string, unknown>).prompt, "").trim()
+    : "";
+
+  const rawTaskText =
+    asString(context.paperclipTaskMarkdown, "").trim() ||
+    asString(context.paperclipTaskMarkdownAssignment, "").trim() ||
+    asString(context.task, "").trim() ||
+    asString(context.prompt, "").trim() ||
+    payloadPrompt;
+
+  let promptText = "";
+  if (config.promptTemplate) {
+    promptText = renderTemplate(asString(config.promptTemplate, ""), {
+      agent,
+      context,
+      task: rawTaskText,
+      wakeReason: context.wakeReason ?? "",
+    }).trim();
+  }
+
+  if (!promptText) {
+    promptText = buildCleanUserPrompt(context, rawTaskText);
+  }
+
+  // Automatically derive and set provisional task title in Paperclip if needed
+  const issueObj = (typeof context.paperclipIssue === "object" && context.paperclipIssue !== null)
+    ? (context.paperclipIssue as Record<string, unknown>)
+    : null;
+  const titleNeedsGeneration = issueObj?.titleNeedsGeneration === true;
+
+  if (issueId && titleNeedsGeneration) {
+    const rawContent = asString(issueObj?.description || promptText, "").trim();
+    const firstLine = rawContent.split("\n")[0].trim().replace(/^[-*#\s]+/, "");
+    const derivedTitle = firstLine.slice(0, 60).trim();
+    if (derivedTitle) {
+      try {
+        await handleSetTaskTitle(
+          { title: derivedTitle, onlyIfProvisional: true },
+          { issueId, apiUrl, authToken },
+        );
+        await onLog("stdout", `[ollama_local] Derived and saved provisional task title: "${derivedTitle}" in Paperclip.\n`);
+      } catch (err) {
+        await onLog("stderr", `[ollama_local] Warning: Could not update provisional title: ${err}\n`);
+      }
+    }
+  }
+
+  const omniaPermissions = parseOmniaPermissions(effectiveConfig);
+
+  await onLog(
+    "stdout",
+    `[omnia:security] Active security mode: "${omniaPermissions.mode}" | Allowed domains: [${omniaPermissions.allowedDomains.join(", ")}] | Allowed methods: [${omniaPermissions.allowedMethods.join(", ")}] | SSRF guard: ${omniaPermissions.allowPrivateNetworks ? "disabled (private networks allowed)" : "active (private networks blocked)"}\n`,
+  );
+
+  let defaultAgentGuidance = "";
+  if (omniaPermissions.mode === "disabled") {
+    defaultAgentGuidance =
+      "OmnIA tool engine is currently DISABLED by security policy.\n" +
+      "- External network operations, IP lookups, REST APIs, and GraphQL tools are unavailable.\n" +
+      "- If the user requests external data, IP lookups, or network operations, politely explain that OmnIA tools are currently disabled in the security settings.";
+  } else if (omniaPermissions.mode === "read_only") {
+    defaultAgentGuidance =
+      "You are an autonomous AI worker executing tasks in Paperclip with the OmnIA tool engine in READ-ONLY mode.\n" +
+      "- Your goal is to fulfill the user's request accurately, directly, and thoughtfully.\n" +
+      "- When external data, IP/location, REST APIs, or GraphQL operations are required, invoke the OmnIA tool (`omnia` or its specialized functions `omnia_ip_location`, `omnia_http_request`, `omnia_graphql`, `omnia_inspect_docs`).\n" +
+      "- In READ-ONLY mode: GET requests, documentation inspection, and GraphQL queries are permitted. Mutating operations (POST, PUT, DELETE, PATCH, GraphQL mutations) are strictly blocked by security policy.\n" +
+      "- Pass explicit call parameters (operation, url, method, params, headers, body, query).\n" +
+      "- Once OmnIA returns the result, analyze, synthesize, and elaborate the data clearly to formulate a complete, conversational response in the language of the prompt (do not just dump raw JSON).";
+  } else if (omniaPermissions.mode === "restricted") {
+    defaultAgentGuidance =
+      `You are an autonomous AI worker executing tasks in Paperclip with the OmnIA tool engine in RESTRICTED mode.\n` +
+      `- Permitted domains: [${omniaPermissions.allowedDomains.join(", ")}]. Permitted methods: [${omniaPermissions.allowedMethods.join(", ")}].\n` +
+      `- Calls to endpoints outside permitted domains or with non-permitted methods will be rejected by security policy.\n` +
+      `- When external data or API operations are required, invoke the OmnIA tool (\`omnia\` or its specialized functions) targeting ONLY permitted domains.\n` +
+      `- Once OmnIA returns the result, analyze, synthesize, and elaborate the data clearly to formulate a complete, conversational response in the language of the prompt.`;
+  } else {
+    // Permissive
+    defaultAgentGuidance =
+      "You are an autonomous AI worker executing tasks in Paperclip with the OmnIA tool engine.\n" +
+      "- Your goal is to fulfill the user's request accurately, directly, and thoughtfully.\n" +
+      "- When external data, IP/location, REST APIs, or GraphQL operations are required, invoke the OmnIA tool (`omnia` or its specialized functions `omnia_ip_location`, `omnia_http_request`, `omnia_graphql`, `omnia_inspect_docs`).\n" +
+      "- Pass explicit call parameters (operation, url, method, params, headers, body, query).\n" +
+      "- OmnIA calls are protected by an SSRF safety guard against private networks.\n" +
+      "- Once OmnIA returns the result, analyze, synthesize, and elaborate the data clearly to formulate a complete, conversational response in the language of the prompt (do not just dump raw JSON).";
+  }
+
+  systemPrompt = systemPrompt
+    ? `${systemPrompt}\n\n---\n${defaultAgentGuidance}`
+    : defaultAgentGuidance;
+
+  const messages: OllamaChatMessage[] = [];
+  messages.push({ role: "system", content: systemPrompt });
+  messages.push({ role: "user", content: promptText });
+
+  // 3. Prepare request payload and tools with OmnIA suite
+  const tools: unknown[] = [];
+  if (omniaPermissions.mode !== "disabled") {
+    tools.push(...OMNIA_TOOLS);
+    // Legacy tool definitions for backward compatibility
+    tools.push(IP_LOCATION_TOOL_DEFINITION);
+    tools.push(...GENERIC_API_TOOLS);
+  }
+
+  // Pre-load OpenAPI documentation if configured
+  const openApiSpecSource = asString(config.openapi_spec_url || config.openapi_spec_file, "").trim();
+  if (openApiSpecSource) {
+    try {
+      const spec = await loadOpenApiSpec(openApiSpecSource);
+      const docsSummary = formatOpenApiDocs(spec);
+      systemPrompt = systemPrompt
+        ? `${systemPrompt}\n\n---\n## Pre-configured OpenAPI Documentation\n${docsSummary}`
+        : `## Pre-configured OpenAPI Documentation\n${docsSummary}`;
+    } catch (err) {
+      await onLog("stderr", `[ollama_local] Warning: Could not pre-load OpenAPI spec from ${openApiSpecSource}: ${err}\n`);
+    }
+  }
+
+  // Pre-load GraphQL endpoint note if configured
+  const graphqlEndpointUrl = asString(config.graphql_endpoint_url, "").trim();
+  if (graphqlEndpointUrl) {
+    const graphqlNote = `\n## Pre-configured GraphQL Endpoint\nEndpoint URL: \`${graphqlEndpointUrl}\`. Use the \`query_graphql\` tool to query/mutate data or \`inspect_api_documentation\` to explore schema.`;
+    systemPrompt = systemPrompt ? `${systemPrompt}\n\n---\n${graphqlNote}` : graphqlNote;
+  }
+
+  const toolNames = tools.map((t: any) => t.function?.name || "tool").join(", ");
+
+  const controller = new AbortController();
+  const timer = timeoutSec > 0 ? setTimeout(() => controller.abort(), timeoutSec * 1000) : null;
+
+  try {
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+    let finalAssistantText = "";
+    let turn = 0;
+    const maxTurns = 5;
+
+    while (turn < maxTurns) {
+      turn++;
+      const isFirstTurn = turn === 1;
+
+      const requestBody: Record<string, unknown> = {
+        model,
+        messages,
+        stream: true,
+        options,
+        ...(keepAlive ? { keep_alive: keepAlive } : {}),
+        ...(tools.length > 0 ? { tools } : {}),
+      };
+
+      if (isFirstTurn) {
+        onDispatch?.();
+        await onLog(
+          "stdout",
+          `[ollama_local] Invoking model "${model}" at ${host} (tools: ${tools.length > 0 ? `enabled [${toolNames}]` : "disabled"})...\n`,
+        );
+      } else {
+        await onLog(
+          "stdout",
+          `[ollama_local] Turn ${turn}: Processing tool results with model "${model}"...\n`,
+        );
+      }
+
+      const res = await fetch(`${host}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        return {
+          exitCode: 1,
+          signal: null,
+          timedOut: false,
+          errorMessage: `Ollama chat API error (HTTP ${res.status}): ${errorText}`,
+          errorCode: "ollama_api_error",
+        };
+      }
+
+      if (!res.body) {
+        return {
+          exitCode: 1,
+          signal: null,
+          timedOut: false,
+          errorMessage: "Ollama returned an empty response body",
+          errorCode: "ollama_empty_body",
+        };
+      }
+
+      let turnAssistantText = "";
+      let turnInputTokens = 0;
+      let turnOutputTokens = 0;
+      let lineBuffer = "";
+      const capturedToolCalls: ToolCall[] = [];
+
+      const reader = res.body as unknown as AsyncIterable<Uint8Array>;
+      const decoder = new TextDecoder("utf-8");
+
+      for await (const chunk of reader) {
+        lineBuffer += decoder.decode(chunk, { stream: true });
+        let newlineIndex: number;
+
+        while ((newlineIndex = lineBuffer.indexOf("\n")) !== -1) {
+          const line = lineBuffer.slice(0, newlineIndex).trim();
+          lineBuffer = lineBuffer.slice(newlineIndex + 1);
+
+          if (!line) continue;
+
+          try {
+            const parsed = JSON.parse(line) as OllamaStreamChunk;
+
+            if (parsed.error) {
+              await onLog("stderr", `[ollama_local] Model error: ${parsed.error}\n`);
+              return {
+                exitCode: 1,
+                signal: null,
+                timedOut: false,
+                errorMessage: parsed.error,
+                errorCode: "ollama_model_error",
+              };
+            }
+
+            if (parsed.message?.content) {
+              turnAssistantText += parsed.message.content;
+              await onLog("stdout", parsed.message.content);
+            }
+
+            if (parsed.message?.tool_calls && Array.isArray(parsed.message.tool_calls)) {
+              for (const call of parsed.message.tool_calls) {
+                capturedToolCalls.push(call);
+              }
+            }
+
+            if (parsed.done) {
+              turnInputTokens = parsed.prompt_eval_count ?? 0;
+              turnOutputTokens = parsed.eval_count ?? 0;
+            }
+          } catch {
+            // Non-JSON line or incomplete chunk
+          }
+        }
+      }
+
+      // Flush remaining line buffer
+      if (lineBuffer.trim()) {
+        try {
+          const parsed = JSON.parse(lineBuffer.trim()) as OllamaStreamChunk;
+          if (parsed.message?.content) {
+            turnAssistantText += parsed.message.content;
+            await onLog("stdout", parsed.message.content);
+          }
+          if (parsed.message?.tool_calls && Array.isArray(parsed.message.tool_calls)) {
+            for (const call of parsed.message.tool_calls) {
+              capturedToolCalls.push(call);
+            }
+          }
+          if (parsed.done) {
+            turnInputTokens = parsed.prompt_eval_count ?? turnInputTokens;
+            turnOutputTokens = parsed.eval_count ?? turnOutputTokens;
+          }
+        } catch {
+          // ignore trailing unparseable
+        }
+      }
+
+      totalInputTokens += turnInputTokens;
+      totalOutputTokens += turnOutputTokens;
+
+      if (turnAssistantText.trim()) {
+        finalAssistantText = turnAssistantText;
+      }
+
+      // Filter out dummy/hallucinated tool calls (e.g. {"name": "None"}, null, or empty name)
+      const validToolCalls = capturedToolCalls.filter(
+        (c) => c.function?.name && c.function.name !== "None" && c.function.name !== "null" && c.function.name.trim().length > 0,
+      );
+
+      // If no valid tools were called in this turn, execution is complete
+      if (validToolCalls.length === 0) {
+        break;
+      }
+
+      // Append assistant message with its valid tool calls
+      messages.push({
+        role: "assistant",
+        content: turnAssistantText || "",
+        tool_calls: validToolCalls,
+      });
+
+      // Execute each tool and append tool results
+      for (const call of validToolCalls) {
+        let args: Record<string, unknown> = {};
+        if (typeof call.function.arguments === "string") {
+          try {
+            args = JSON.parse(call.function.arguments);
+          } catch {
+            args = {};
+          }
+        } else if (typeof call.function.arguments === "object" && call.function.arguments) {
+          args = call.function.arguments as Record<string, unknown>;
+        }
+
+        const toolName = call.function?.name || "";
+        const callId = call.id || `${toolName}-call`;
+
+        await onLog(
+          "stdout",
+          `\n[omnia:tool_call] ${JSON.stringify({ name: toolName, arguments: args, id: callId })}\n`,
+        );
+
+        let toolResult: unknown;
+        try {
+          if (toolName === "omnia") {
+            toolResult = await executeOmniaOperation(args, effectiveConfig);
+          } else if (toolName === "omnia_ip_location" || toolName === "get_ip_location") {
+            toolResult = await executeOmniaOperation({ ...args, operation: "ip_location" }, effectiveConfig);
+          } else if (toolName === "omnia_http_request" || toolName === "call_api_endpoint") {
+            toolResult = await executeOmniaOperation({ ...args, operation: "http_request" }, effectiveConfig);
+          } else if (toolName === "omnia_graphql" || toolName === "query_graphql") {
+            toolResult = await executeOmniaOperation({ ...args, operation: "graphql_query" }, effectiveConfig);
+          } else if (toolName === "omnia_inspect_docs" || toolName === "inspect_api_documentation") {
+            toolResult = await executeOmniaOperation({ ...args, operation: "inspect_api" }, effectiveConfig);
+          } else if (toolName === "set_task_title") {
+            toolResult = await handleSetTaskTitle(args, {
+              issueId,
+              apiUrl,
+              authToken,
+            });
+          } else {
+            toolResult = { error: `Tool "${toolName}" is not recognized by OmnIA.` };
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          toolResult = { error: `OmnIA tool execution failed: ${msg}` };
+        }
+
+        await onLog(
+          "stdout",
+          `[omnia:tool_result] ${JSON.stringify(toolResult)}\n\n`,
+        );
+
+        messages.push({
+          role: "tool",
+          content: typeof toolResult === "string" ? toolResult : JSON.stringify(toolResult),
+        });
+      }
+    }
+
+    await onLog("stdout", "\n");
+
+    // Automatically transition issue status to 'done' when substantive output was produced.
+    // This prevents Paperclip's recovery worker from triggering retry cascades (disposition_repair).
+    if (issueId && finalAssistantText.trim()) {
+      try {
+        const marked = await markIssueDone({
+          issueId,
+          apiUrl,
+          authToken,
+        });
+        if (marked) {
+          await onLog("stdout", `[ollama_local] Successfully marked issue ${issueId} as done.\n`);
+        }
+      } catch (err) {
+        await onLog("stderr", `[ollama_local] Warning: Could not mark issue ${issueId} as done: ${err}\n`);
+      }
+    }
+
+    return {
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      provider: "ollama",
+      model,
+      usage: {
+        inputTokens: totalInputTokens,
+        outputTokens: totalOutputTokens,
+      },
+      summary: finalAssistantText,
+      reportedWorkDisposition: "done",
+    };
+  } catch (err) {
+    if (timer && err instanceof Error && err.name === "AbortError") {
+      return {
+        exitCode: null,
+        signal: null,
+        timedOut: true,
+        errorMessage: `Ollama invocation timed out after ${timeoutSec} seconds`,
+        errorCode: "timeout",
+      };
+    }
+
+    const message = err instanceof Error ? err.message : String(err);
+    await onLog("stderr", `[ollama_local] Execution error: ${message}\n`);
+
+    return {
+      exitCode: 1,
+      signal: null,
+      timedOut: false,
+      errorMessage: `Ollama execution failed: ${message}`,
+      errorCode: "ollama_execution_failed",
+    };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}

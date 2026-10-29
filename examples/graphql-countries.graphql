@@ -1,0 +1,17 @@
+# Example GraphQL query against public Countries API
+# Endpoint: https://countries.trevorblades.com/graphql
+
+query GetCountryDetails($code: ID!) {
+  country(code: $code) {
+    code
+    name
+    native
+    capital
+    currency
+    emoji
+    languages {
+      code
+      name
+    }
+  }
+}
