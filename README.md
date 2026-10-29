@@ -1,8 +1,12 @@
-# Ollama Paperclip Adapter (`ollama_local`)
+# OmnIA Paperclip Adapter (`omnia-paperclip-adapter`)
 
-Decoupled external adapter plugin for **Paperclip** that enables sovereign, local LLM execution via **Ollama**, featuring:
+Decoupled external adapter plugin for **Paperclip** that enables sovereign, local LLM execution via **Ollama** and **OmnIA Governance & Security Engine**, featuring:
 - Full **Open WebUI-compliant** model parameter configuration.
 - Real-time streaming token output with structured tool call and tool result logging (`ui-parser.js`).
+- **OmnIA Governance & Security Mode Enforcement** (`permissive`, `read_only`, `restricted`, `disabled`):
+  - Domain whitelisting (`allowedDomains`).
+  - Read-only method restrictions (blocking POST/PUT/DELETE/PATCH/Mutations).
+  - Explicit tool disabling.
 - Dual-step **IP & Geolocation inspection tool** (`get_ip_location`).
 - **Generic Custom API & Connector Tooling**:
   - **REST / OpenAPI**: Dynamic endpoint execution (`call_api_endpoint`) with URL path interpolation, query parameters, custom headers, and payload formatting.
@@ -22,7 +26,7 @@ Decoupled external adapter plugin for **Paperclip** that enables sovereign, loca
 When configured, the adapter exposes function tools to models that support function calling (`qwen3:8b`, `gemma4`, `llama3.1`, etc.):
 
 ### 1. `call_api_endpoint`
-Executes an arbitrary REST API endpoint.
+Executes an arbitrary REST API endpoint subject to OmnIA security mode policies.
 
 ```json
 {
@@ -47,7 +51,7 @@ Executes an arbitrary REST API endpoint.
 ```
 
 ### 2. `query_graphql`
-Executes a GraphQL query or mutation.
+Executes a GraphQL query or mutation subject to OmnIA security mode policies.
 
 ```json
 {
@@ -101,6 +105,19 @@ Inspects external public IP and geolocation details using `api.ipify.org` + `ipw
 
 ---
 
+## Security Modes
+
+OmnIA provides 4 operational security tiers:
+
+| Mode | Allowed HTTP Methods | Domain Policy | Tool Calls Permitted |
+|---|---|---|---|
+| `permissive` | All (`GET`, `POST`, `PUT`, `DELETE`, `PATCH`, GraphQL queries & mutations) | Any domain | All |
+| `read_only` | Safe methods only (`GET`, `HEAD`, `OPTIONS`, GraphQL queries) | Any domain | Read-only |
+| `restricted` | Safe methods only (`GET`, `HEAD`, `OPTIONS`, GraphQL queries) | Whitelist only (`allowedDomains`) | Read-only on whitelisted domains |
+| `disabled` | None | None | None (all tool invocations blocked) |
+
+---
+
 ## Authentication Schemes
 
 | Scheme | Config Schema | Resulting Header / Parameter |
@@ -117,7 +134,7 @@ Inspects external public IP and geolocation details using `api.ipify.org` + `ipw
 
 ```json
 {
-  "adapterType": "ollama_local",
+  "adapterType": "omnia",
   "adapterConfig": {
     "baseUrl": "http://127.0.0.1:11434",
     "model": "qwen3:8b",
@@ -125,8 +142,8 @@ Inspects external public IP and geolocation details using `api.ipify.org` + `ipw
     "num_ctx": 8192,
     "enable_ip_tool": true,
     "enable_custom_api_tools": true,
-    "openapi_spec_url": "https://petstore.swagger.io/v2/swagger.json",
-    "graphql_endpoint_url": "https://countries.trevorblades.com/graphql"
+    "security_mode": "restricted",
+    "allowed_domains": ["api.github.com", "countries.trevorblades.com"]
   }
 }
 ```
