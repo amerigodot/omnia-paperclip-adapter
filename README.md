@@ -130,6 +130,65 @@ OmnIA provides 4 operational security tiers:
 
 ---
 
+## Installation & Paperclip Integration
+
+Paperclip allows decoupled external adapters to reside anywhere on disk or in remote registries. Choose one of the following methods:
+
+### Method A: Declarative via `~/.paperclip/adapter-plugins.json` (Recommended for Local Dev)
+Paperclip persists external adapters in `~/.paperclip/adapter-plugins.json`. Clone or copy this repository to any folder on your machine (completely outside Paperclip), build it, and register its absolute path:
+
+```bash
+git clone https://github.com/amerigodot/omnia-paperclip-adapter.git
+cd omnia-paperclip-adapter
+npm install
+npm run build
+```
+
+Then add the entry to `~/.paperclip/adapter-plugins.json`:
+
+```json
+[
+  {
+    "packageName": "omnia-paperclip-adapter",
+    "localPath": "/absolute/path/to/omnia-paperclip-adapter",
+    "type": "omnia"
+  }
+]
+```
+When Paperclip starts, the plugin loader automatically loads the adapter from `localPath`.
+
+---
+
+### Method B: Dynamic Runtime via REST API (`/api/adapters/install`)
+If Paperclip is already running, you can register and hot-load the local adapter without manual config file edits or restarting the server:
+
+```bash
+curl -X POST http://127.0.0.1:3100/api/adapters/install \
+  -H "Content-Type: application/json" \
+  -d '{
+    "packageName": "/absolute/path/to/omnia-paperclip-adapter",
+    "isLocalPath": true
+  }'
+```
+
+Paperclip validates `package.json`, updates `adapter-plugins.json`, and loads the `omnia` adapter type immediately into memory.
+
+---
+
+### Method C: via npm / Remote Registry (Production & Multi-Machine)
+If published to npm or an internal/private package registry:
+
+```bash
+curl -X POST http://127.0.0.1:3100/api/adapters/install \
+  -H "Content-Type: application/json" \
+  -d '{
+    "packageName": "omnia-paperclip-adapter"
+  }'
+```
+Paperclip downloads and installs the package into `~/.paperclip/adapter-plugins/node_modules/` and registers the adapter automatically.
+
+---
+
 ## Agent Configuration in Paperclip
 
 ```json
