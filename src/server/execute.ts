@@ -245,7 +245,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           : instructionsContent.trim();
       }
     } catch (err) {
-      await onLog("stderr", `[ollama_local] Warning: Could not read instructions file ${instructionsPath}: ${err}\n`);
+      await onLog("stderr", `[omnia] Warning: Could not read instructions file ${instructionsPath}: ${err}\n`);
     }
   }
 
@@ -291,9 +291,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           { title: derivedTitle, onlyIfProvisional: true },
           { issueId, apiUrl, authToken },
         );
-        await onLog("stdout", `[ollama_local] Derived and saved provisional task title: "${derivedTitle}" in Paperclip.\n`);
+        await onLog("stdout", `[omnia] Derived and saved provisional task title: "${derivedTitle}" in Paperclip.\n`);
       } catch (err) {
-        await onLog("stderr", `[ollama_local] Warning: Could not update provisional title: ${err}\n`);
+        await onLog("stderr", `[omnia] Warning: Could not update provisional title: ${err}\n`);
       }
     }
   }
@@ -364,7 +364,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         ? `${systemPrompt}\n\n---\n## Pre-configured OpenAPI Documentation\n${docsSummary}`
         : `## Pre-configured OpenAPI Documentation\n${docsSummary}`;
     } catch (err) {
-      await onLog("stderr", `[ollama_local] Warning: Could not pre-load OpenAPI spec from ${openApiSpecSource}: ${err}\n`);
+      await onLog("stderr", `[omnia] Warning: Could not pre-load OpenAPI spec from ${openApiSpecSource}: ${err}\n`);
     }
   }
 
@@ -404,12 +404,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         onDispatch?.();
         await onLog(
           "stdout",
-          `[ollama_local] Invoking model "${model}" at ${host} (tools: ${tools.length > 0 ? `enabled [${toolNames}]` : "disabled"})...\n`,
+          `[omnia] Invoking model "${model}" at ${host} (tools: ${tools.length > 0 ? `enabled [${toolNames}]` : "disabled"})...\n`,
         );
       } else {
         await onLog(
           "stdout",
-          `[ollama_local] Turn ${turn}: Processing tool results with model "${model}"...\n`,
+          `[omnia] Turn ${turn}: Processing tool results with model "${model}"...\n`,
         );
       }
 
@@ -464,7 +464,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
             const parsed = JSON.parse(line) as OllamaStreamChunk;
 
             if (parsed.error) {
-              await onLog("stderr", `[ollama_local] Model error: ${parsed.error}\n`);
+              await onLog("stderr", `[omnia] Model error: ${parsed.error}\n`);
               return {
                 exitCode: 1,
                 signal: null,
@@ -612,10 +612,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           authToken,
         });
         if (marked) {
-          await onLog("stdout", `[ollama_local] Successfully marked issue ${issueId} as done.\n`);
+          await onLog("stdout", `[omnia] Successfully marked issue ${issueId} as done.\n`);
         }
       } catch (err) {
-        await onLog("stderr", `[ollama_local] Warning: Could not mark issue ${issueId} as done: ${err}\n`);
+        await onLog("stderr", `[omnia] Warning: Could not mark issue ${issueId} as done: ${err}\n`);
       }
     }
 
@@ -644,7 +644,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     }
 
     const message = err instanceof Error ? err.message : String(err);
-    await onLog("stderr", `[ollama_local] Execution error: ${message}\n`);
+    await onLog("stderr", `[omnia] Execution error: ${message}\n`);
 
     return {
       exitCode: 1,

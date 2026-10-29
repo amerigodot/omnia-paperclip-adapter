@@ -49,7 +49,7 @@ export function parseStdoutLine(line: string, ts: string): TranscriptEntry[] {
     ];
   }
 
-  if (trimmed.startsWith("[ollama_local]")) {
+  if (trimmed.startsWith("[omnia]") || trimmed.startsWith("[ollama_local]")) {
     return [{ kind: "system", ts, text: trimmed }];
   }
 
