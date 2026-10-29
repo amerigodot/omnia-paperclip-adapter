@@ -218,3 +218,10 @@ npm run build
 # Run Unit Tests
 npm test
 ```
+
+---
+
+## License
+
+MIT License. See [LICENSE](LICENSE) for details.
+
