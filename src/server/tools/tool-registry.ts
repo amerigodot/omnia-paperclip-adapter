@@ -189,42 +189,14 @@ export function parseConfiguredTools(config: Record<string, unknown>): OmniaTool
       };
     });
 
-  // Check global convenience switches
-  const ipToolDisabled =
-    config.enable_ip_tool === false ||
-    config.enable_ip_tool === "false" ||
-    config.enable_ip_location === false ||
-    config.enable_ip_location === "false";
-
-  const httpToolDisabled =
-    config.enable_http_tool === false ||
-    config.enable_http_tool === "false" ||
-    config.enable_custom_api_tools === false ||
-    config.enable_custom_api_tools === "false";
-
-  const graphqlToolDisabled =
-    config.enable_graphql_tool === false ||
-    config.enable_graphql_tool === "false";
-
-  const inspectToolDisabled =
-    config.enable_inspect_tool === false ||
-    config.enable_inspect_tool === "false";
-
+  // If global security mode is explicitly disabled, disable all tools
   const isGloballyDisabled =
     config.omnia_mode === "disabled" ||
     config.security_mode === "disabled" ||
     config.omnia_mode === "off";
 
-  for (const t of tools) {
-    if (isGloballyDisabled) {
-      t.enabled = false;
-    } else if (t.type === "ip_location" && ipToolDisabled) {
-      t.enabled = false;
-    } else if (t.type === "http_request" && httpToolDisabled && !t.access?.url) {
-      t.enabled = false;
-    } else if (t.type === "graphql" && graphqlToolDisabled && !t.access?.url) {
-      t.enabled = false;
-    } else if (t.type === "inspect_api" && inspectToolDisabled) {
+  if (isGloballyDisabled) {
+    for (const t of tools) {
       t.enabled = false;
     }
   }
