@@ -2,15 +2,15 @@ export const type = "omnia";
 export const label = "OmnIA";
 
 export const DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434";
-export const DEFAULT_OLLAMA_MODEL = "qwen3:8b";
+export const DEFAULT_OLLAMA_MODEL = "qwen2.5:7b";
 
 export const models: Array<{ id: string; label: string }> = [
-  { id: "gemma4:latest", label: "Gemma 4 (8.0B - Tools + Thinking)" },
-  { id: "qwen3:8b", label: "Qwen 3 8B (Tools + Thinking)" },
+  { id: "qwen2.5:7b", label: "Qwen 2.5 7B (Tools + Function Calling)" },
+  { id: "llama3.1:8b", label: "Llama 3.1 8B (Tools + Function Calling)" },
+  { id: "deepseek-r1:8b", label: "DeepSeek R1 8B (Thinking)" },
+  { id: "mistral-nemo:12b", label: "Mistral Nemo 12B (Tools)" },
   { id: "qwen2.5:3b", label: "Qwen 2.5 3B" },
-  { id: "glm-4.6:cloud", label: "GLM-4.6 Cloud (355B)" },
-  { id: "glm-4.7:cloud", label: "GLM-4.7 Cloud" },
-  { id: "med:latest", label: "MedGemma 4B (Vision)" },
+  { id: "gemma2:9b", label: "Gemma 2 9B" },
 ];
 
 export interface OllamaModelOptions {
@@ -104,7 +104,7 @@ Don't use when:
 
 Core fields:
 - baseUrl (string, optional, default "http://127.0.0.1:11434"): Ollama daemon endpoint URL
-- model (string, required, default "qwen3:8b"): Installed Ollama model tag
+- model (string, required, default "qwen2.5:7b"): Installed Ollama model tag
 - system (string, optional): System instructions prompt override
 - instructionsFilePath (string, optional): Path to AGENTS.md markdown instructions file
 - promptTemplate (string, optional): Task prompt template

@@ -4,7 +4,7 @@ import type {
 } from "../types.js";
 import { asString } from "./utils.js";
 import { DEFAULT_OLLAMA_HOST, type } from "../index.js";
-import { fetchOllamaTags } from "./models.js";
+import { fetchOllamaTags, recordActiveOllamaHost } from "./models.js";
 
 function resolveHost(config: Record<string, unknown>): string {
   const custom = asString(config.baseUrl || config.host || process.env.OLLAMA_HOST, DEFAULT_OLLAMA_HOST).trim();
@@ -46,6 +46,7 @@ export async function testEnvironment(
     const version = versionData.version || "unknown";
 
     const models = await fetchOllamaTags(host);
+    recordActiveOllamaHost(host, models);
     const modelNames = models.map((m) => m.id);
 
     return {

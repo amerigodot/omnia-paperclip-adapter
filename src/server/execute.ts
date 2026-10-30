@@ -12,6 +12,11 @@ import {
 } from "./utils.js";
 import { DEFAULT_OLLAMA_HOST, DEFAULT_OLLAMA_MODEL } from "../index.js";
 import {
+  recordActiveOllamaHost,
+  resolveModelForHost,
+  fetchOllamaTags,
+} from "./models.js";
+import {
   getIpLocation,
   IP_LOCATION_TOOL_DEFINITION,
 } from "./tools/ip-location.js";
@@ -224,7 +229,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   };
 
   const host = resolveHost(effectiveConfig);
-  const model = resolveModel(effectiveConfig);
+  recordActiveOllamaHost(host);
+
+  const modelResolution = await resolveModelForHost(
+    asString(effectiveConfig.model, ""),
+    host,
+  );
+  const model = modelResolution.model;
+  if (modelResolution.warning) {
+    await onLog("stdout", `${modelResolution.warning}\n`);
+  }
   const options = buildOllamaOptions(effectiveConfig);
   const keepAlive = asString(effectiveConfig.keep_alive, "15m").trim();
   const timeoutSec = asNumber(effectiveConfig.timeoutSec, 0);
@@ -417,6 +431,20 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
       if (!res.ok) {
         const errorText = await res.text();
+        if (res.status === 404 && (errorText.includes("not found") || errorText.includes("model"))) {
+          const tags = await fetchOllamaTags(host);
+          const availableList = tags.map((t) => t.id).join(", ");
+          const detailedMsg = `Ollama error on host ${host}: Model "${model}" was not found (HTTP 404).\nAvailable models installed on ${host}: [${availableList || "none found"}].\nTo fix this: pull the model on the remote server with 'ollama pull ${model}', or select one of the available models in Paperclip.`;
+          await onLog("stderr", `[omnia] ${detailedMsg}\n`);
+          return {
+            exitCode: 1,
+            signal: null,
+            timedOut: false,
+            errorMessage: detailedMsg,
+            errorCode: "ollama_model_not_found",
+          };
+        }
+
         return {
           exitCode: 1,
           signal: null,
