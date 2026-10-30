@@ -241,7 +241,7 @@ OmnIA provides 4 operational security tiers:
 
 Paperclip allows decoupled external adapters to reside anywhere on disk or in remote registries. Choose one of the following methods:
 
-### Method A: Declarative via `~/.paperclip/adapter-plugins.json` (Recommended for Local Dev)
+### Method A: Declarative via `~/.paperclip/adapter-plugins.json` (Recommended for Local Dev & Docker)
 Paperclip persists external adapters in `~/.paperclip/adapter-plugins.json`. Clone or copy this repository to any folder on your machine (completely outside Paperclip), build it, and register its absolute path:
 
 ```bash
@@ -264,6 +264,41 @@ Then add the entry to `~/.paperclip/adapter-plugins.json`:
 ```
 When Paperclip starts, the plugin loader automatically loads the adapter from `localPath`.
 
+#### Docker & Docker Compose Setup
+When running Paperclip in Docker (where `PAPERCLIP_HOME=/paperclip` and data is persisted under `./data/docker-paperclip:/paperclip`):
+
+1. **Build the adapter on the host**:
+   ```bash
+   cd omnia-paperclip-adapter
+   npm install && npm run build
+   ```
+
+2. **Mount the adapter into the container** in `docker-compose.yml`:
+   ```yaml
+   services:
+     paperclip:
+       image: paperclip-local # or official Paperclip image
+       ports:
+         - "3100:3100"
+       environment:
+         - PAPERCLIP_HOME=/paperclip
+       volumes:
+         - ./data/docker-paperclip:/paperclip
+         - ./omnia-paperclip-adapter:/plugins/omnia-paperclip-adapter:ro
+   ```
+
+3. **Register the container path** in `./data/docker-paperclip/adapter-plugins.json`:
+   ```json
+   [
+     {
+       "packageName": "omnia-paperclip-adapter",
+       "localPath": "/plugins/omnia-paperclip-adapter",
+       "type": "omnia"
+     }
+   ]
+   ```
+   *Notice: Specify the internal container path (`/plugins/omnia-paperclip-adapter`), not the host filesystem path.*
+
 ---
 
 ### Method B: Dynamic Runtime via REST API (`/api/adapters/install`)
@@ -279,6 +314,12 @@ curl -X POST http://127.0.0.1:3100/api/adapters/install \
 ```
 
 Paperclip validates `package.json`, updates `adapter-plugins.json`, and loads the `omnia` adapter type immediately into memory.
+
+> [!IMPORTANT]
+> **Docker Recommendations for Method B:**
+> - **Internal container path only**: In Docker environments, `packageName` must point to the path **inside the container** (e.g. `"/plugins/omnia-paperclip-adapter"`), never the host machine path (e.g. `/Users/...` or `C:\...`).
+> - **Pre-mount required**: The adapter directory must already be mounted or copied into the container filesystem before executing the curl command.
+> - **Persistent volume requirement**: Ensure `PAPERCLIP_HOME` is mounted to a persistent Docker volume, otherwise dynamic registrations will not survive container recreation.
 
 ---
 
