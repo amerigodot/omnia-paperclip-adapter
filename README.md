@@ -3,10 +3,11 @@
 Decoupled external adapter plugin for **Paperclip** that enables sovereign, local LLM execution via **Ollama** and **OmnIA Governance & Security Engine**, featuring:
 - Full **Open WebUI-compliant** model parameter configuration.
 - Real-time streaming token output with structured tool call and tool result logging (`ui-parser.js`).
-- **OmnIA Governance & Security Mode Enforcement** (`permissive`, `read_only`, `restricted`, `disabled`):
-  - Domain whitelisting (`allowedDomains`).
-  - Read-only method restrictions (blocking POST/PUT/DELETE/PATCH/Mutations).
-  - Explicit tool disabling.
+- **OmnIA Governance & Granular Tool Registry**:
+  - Declarative Tool Registry (`omnia_tools`) in YAML/JSON with per-tool enable/disable switches.
+  - Granular access controls (pinned `url`, `baseUrl`, allowed HTTP methods, path patterns).
+  - Individual authentication schemes (`bearer`, `api_key`, `basic`, `hmac`).
+  - No mandatory domain whitelist; default SSRF safety against private networks.
 - Dual-step **IP & Geolocation inspection tool** (`get_ip_location`).
 - **Generic Custom API & Connector Tooling**:
   - **REST / OpenAPI**: Dynamic endpoint execution (`call_api_endpoint`) with URL path interpolation, query parameters, custom headers, and payload formatting.
@@ -21,14 +22,39 @@ Decoupled external adapter plugin for **Paperclip** that enables sovereign, loca
 
 ---
 
-## Granular Tool Registry (`omnia_tools`)
+## Tool Architecture: Registry & Model Execution
+
+OmnIA decouples **tool governance (Control Plane)** from **model execution (Runtime)**:
+
+```
+┌────────────────────────────────────────────────────────┐
+│             Tool Registry (omnia_tools)                 │
+│  - Declare tools (built-in or custom)                  │
+│  - Individual enable/disable toggles                   │
+│  - Dedicated access parameters (URL, allowed methods)  │
+│  - Individual credentials (Bearer, API Key, Basic)     │
+└───────────────────────────┬────────────────────────────┘
+                            │
+              Filters only enabled tools
+                            ▼
+┌────────────────────────────────────────────────────────┐
+│             Model Function-Calling Runtime             │
+│  - Only active tools are exposed to Ollama (qwen3, ...)│
+│  - Model calls tool by name with arguments             │
+│  - OmnIA injects credentials & enforces permissions    │
+└────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 1. Declarative Tool Registry (`omnia_tools`)
 
 Rather than relying on a rigid global domain whitelist, OmnIA uses a **declarative Tool Registry** (supported in both **YAML** and **JSON**).
 
 This enables:
 1. **Clear Tool Identification**: Each tool has an explicit name, human-readable label, and LLM guidance description.
 2. **Add / Remove Tools**: Add arbitrary new API endpoints or remove unwanted default tools.
-3. **Enable / Disable Toggles**: Toggle individual tools on/off (`enabled: true | false`) without deleting their configuration. Disabled tools are excluded from the model prompt and rejected if invoked.
+3. **Enable / Disable Toggles**: Toggle individual tools on/off (`enabled: true | false`) without deleting their configuration. Disabled tools are completely excluded from the model prompt and rejected if invoked.
 4. **Individual Access Parameters**:
    - `url` or `baseUrl`: Pinned target endpoint URL or permitted base URL prefix.
    - `allowedMethods`: Permitted HTTP methods specifically for that tool (e.g. `["GET"]` for read-only, `["POST"]` for webhooks).
@@ -37,7 +63,7 @@ This enables:
 5. **Individual Authentication**: Configure credentials per tool (`bearer`, `api_key`, `basic`, `hmac`), resolving from environment variables (`tokenEnv`, `keyEnv`) or direct values.
 6. **No Mandatory Whitelist**: Public targets can be accessed cleanly based on tool configuration without requiring an arbitrary non-empty global domain whitelist.
 
-### Example Tool Registry Configuration (YAML)
+#### Example Tool Registry Configuration (YAML)
 
 ```yaml
 # 1. IP Location Inspector
@@ -47,7 +73,7 @@ This enables:
   type: ip_location
   enabled: true
 
-# 2. General REST API Client
+# 2. General REST API Client (Open endpoint discovery)
 - name: call_api_endpoint
   label: "REST API Client"
   description: "Executes HTTP requests to API endpoints."
@@ -56,7 +82,7 @@ This enables:
   access:
     allowedMethods: ["GET", "POST", "PUT", "PATCH", "DELETE"]
 
-# 3. Dedicated GitHub Issues Tool (Individual Auth & Scoped URL)
+# 3. Dedicated Custom Tool: GitHub Issues (Pre-bound URL & Private Auth)
 - name: get_github_issues
   label: "GitHub Issues Reader"
   description: "Query open issues and PRs from Paperclip repository."
@@ -69,12 +95,12 @@ This enables:
     type: bearer
     tokenEnv: "GITHUB_TOKEN"
 
-# 4. GraphQL Query Tool
+# 4. GraphQL Query Tool (Disabled in settings)
 - name: query_graphql
   label: "GraphQL Client"
   description: "Executes GraphQL queries and mutations."
   type: graphql
-  enabled: false  # Disabled: hidden from model and blocked from execution
+  enabled: false  # Disabled: completely hidden from the model prompt
   access:
     allowedMethods: ["POST"]
 
@@ -88,12 +114,30 @@ This enables:
 
 ---
 
-## Tools Available to Models
+### 2. Runtime: What Models See & Invocations
 
-When configured, the adapter exposes function tools to models that support function calling (`qwen3:8b`, `gemma4`, `llama3.1`, etc.):
+When an agent runs, OmnIA projects **only the enabled tools** into Ollama's function-calling schema. The model then invokes tools using structured JSON arguments.
 
-### 1. `call_api_endpoint`
-Executes an arbitrary REST API endpoint subject to OmnIA security mode policies.
+Below are the invocation signatures for the primary tool engines:
+
+#### A. Dedicated / Scoped REST Tool (e.g. `get_github_issues`)
+When a tool has a pre-bound URL and auth configured in the Registry, the model invocation is simple and safe—the model does not need to know the target URL or authentication secret:
+
+```json
+{
+  "name": "get_github_issues",
+  "arguments": {
+    "params": {
+      "state": "open",
+      "per_page": 5
+    }
+  }
+}
+```
+*OmnIA automatically resolves `GITHUB_TOKEN`, attaches `Authorization: Bearer ...`, calls `https://api.github.com/repos/paperclipai/paperclip/issues`, and returns the parsed result.*
+
+#### B. General REST Tool (`call_api_endpoint`)
+For open REST execution across permitted endpoints:
 
 ```json
 {
@@ -108,17 +152,13 @@ Executes an arbitrary REST API endpoint subject to OmnIA security mode policies.
     "query_params": {
       "state": "open",
       "per_page": 5
-    },
-    "auth": {
-      "type": "bearer",
-      "tokenEnv": "GITHUB_TOKEN"
     }
   }
 }
 ```
 
-### 2. `query_graphql`
-Executes a GraphQL query or mutation subject to OmnIA security mode policies.
+#### C. GraphQL Tool (`query_graphql`)
+Executes a GraphQL query or mutation:
 
 ```json
 {
@@ -133,8 +173,8 @@ Executes a GraphQL query or mutation subject to OmnIA security mode policies.
 }
 ```
 
-### 3. `inspect_api_documentation`
-Inspects and summarizes API documentation for either OpenAPI specs or GraphQL endpoints.
+#### D. Schema Inspector (`inspect_api_documentation`)
+Inspects and summarizes OpenAPI (Swagger) specifications or GraphQL schemas:
 
 ```json
 // For OpenAPI (Swagger):
@@ -158,12 +198,12 @@ Inspects and summarizes API documentation for either OpenAPI specs or GraphQL en
 }
 ```
 
-### 4. `get_ip_location`
-Inspects external public IP and geolocation details using `api.ipify.org` + `ipwho.is` / `ip-api.com`.
+#### E. IP & Geolocation Inspector (`ip_location`)
+Inspects current connection IP and geographical location:
 
 ```json
 {
-  "name": "get_ip_location",
+  "name": "ip_location",
   "arguments": {
     "ip": "myip"
   }
