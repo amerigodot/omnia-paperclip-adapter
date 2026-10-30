@@ -228,6 +228,17 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     ...config,
   };
 
+  // Populate environment variables from agent configuration into process.env for tool auth resolution
+  if (effectiveConfig.env && typeof effectiveConfig.env === "object") {
+    for (const [k, v] of Object.entries(effectiveConfig.env as Record<string, unknown>)) {
+      if (typeof v === "string") {
+        process.env[k] = v;
+      } else if (v && typeof v === "object" && "value" in v && typeof (v as any).value === "string") {
+        process.env[k] = (v as any).value;
+      }
+    }
+  }
+
   const host = resolveHost(effectiveConfig);
   recordActiveOllamaHost(host);
 
@@ -323,6 +334,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const configuredTools = parseConfiguredTools(effectiveConfig);
   const enabledTools = getEnabledTools(configuredTools);
   const enabledToolNames = enabledTools.map((t) => t.name);
+
+  if ((configuredTools as any).parseError) {
+    await onLog(
+      "stderr",
+      `[omnia:tools] Warning: Could not parse custom tools from omnia_tools (${(configuredTools as any).parseError}). Default tools loaded.\n`,
+    );
+  }
 
   await onLog(
     "stdout",

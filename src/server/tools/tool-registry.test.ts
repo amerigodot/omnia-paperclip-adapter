@@ -198,4 +198,24 @@ describe("OmnIA Tool Registry - Management, Access & Authentication", () => {
     assert.equal(toolsJson.length, 1);
     assert.equal(toolsJson[0].name, "tool_two");
   });
+
+  it("normalizes root-level baseUrl and allowedMethods into access config", () => {
+    const yaml = `
+- id: github_repo_inspector
+  name: github_repo_inspector
+  description: "Inspect GitHub repo"
+  enabled: true
+  baseUrl: "https://api.github.com"
+  allowedMethods:
+    - GET
+  auth:
+    type: bearer
+    token: "\${MY_SECRET_TOKEN}"
+`;
+    const tools = parseConfiguredTools({ omnia_tools: yaml });
+    assert.equal(tools.length, 1);
+    assert.equal(tools[0].name, "github_repo_inspector");
+    assert.equal(tools[0].access?.baseUrl, "https://api.github.com");
+    assert.deepEqual(tools[0].access?.allowedMethods, ["GET"]);
+  });
 });

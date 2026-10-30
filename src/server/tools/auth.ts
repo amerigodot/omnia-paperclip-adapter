@@ -36,6 +36,16 @@ export interface ResolvedAuth {
   queryParams: Record<string, string>;
 }
 
+function expandEnvValue(val?: string): string | undefined {
+  if (!val) return val;
+  const trimmed = val.trim();
+  if (trimmed.startsWith("${") && trimmed.endsWith("}")) {
+    const varName = trimmed.slice(2, -1).trim();
+    return process.env[varName];
+  }
+  return val;
+}
+
 /**
  * Resolves authentication headers and query parameters from AuthConfig.
  * Secrets are resolved from process.env if env keys are specified, or direct values.
@@ -55,7 +65,7 @@ export function resolveAuth(
     case "bearer": {
       const token =
         (auth.tokenEnv ? process.env[auth.tokenEnv] : undefined) ??
-        auth.token ??
+        expandEnvValue(auth.token) ??
         "";
       if (!token) {
         throw new Error(
@@ -69,7 +79,7 @@ export function resolveAuth(
     case "api_key": {
       const key =
         (auth.keyEnv ? process.env[auth.keyEnv] : undefined) ??
-        auth.key ??
+        expandEnvValue(auth.key) ??
         "";
       if (!key) {
         throw new Error(
@@ -89,11 +99,11 @@ export function resolveAuth(
     case "basic": {
       const username =
         (auth.userEnv ? process.env[auth.userEnv] : undefined) ??
-        auth.username ??
+        expandEnvValue(auth.username) ??
         "";
       const password =
         (auth.passEnv ? process.env[auth.passEnv] : undefined) ??
-        auth.password ??
+        expandEnvValue(auth.password) ??
         "";
       if (!username) {
         throw new Error(
@@ -108,7 +118,7 @@ export function resolveAuth(
     case "hmac": {
       const secret =
         (auth.secretEnv ? process.env[auth.secretEnv] : undefined) ??
-        auth.secret ??
+        expandEnvValue(auth.secret) ??
         "";
       if (!secret) {
         throw new Error(

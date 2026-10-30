@@ -132,12 +132,41 @@ export const DEFAULT_OMNIA_TOOLS: OmniaToolDefinition[] = [
 ];
 
 /**
+ * Normalize and repair common indentation anomalies in user-provided YAML strings
+ * (e.g. pasted from web forms with anomalous leading indentation on list items or tabs).
+ */
+function tryRepairYaml(raw: string): string {
+  const text = raw.replace(/\t/g, "  ");
+  const lines = text.split(/\r?\n/);
+
+  // If all list items are indented, strip common leading indent
+  let minListItemIndent = Infinity;
+  for (const line of lines) {
+    const match = line.match(/^(\s*)-\s+[a-zA-Z0-9_-]+:/);
+    if (match) {
+      if (match[1].length < minListItemIndent) {
+        minListItemIndent = match[1].length;
+      }
+    }
+  }
+
+  if (minListItemIndent > 0 && minListItemIndent !== Infinity) {
+    return lines
+      .map((l) => (l.startsWith(" ".repeat(minListItemIndent)) ? l.slice(minListItemIndent) : l))
+      .join("\n");
+  }
+
+  return text;
+}
+
+/**
  * Parse tools from agent configuration.
  * Supports YAML string, JSON string, or native Array of OmniaToolDefinition objects.
  * Merges legacy toggles if present.
  */
 export function parseConfiguredTools(config: Record<string, unknown>): OmniaToolDefinition[] {
   let tools: OmniaToolDefinition[] = [];
+  let parseErrorMessage: string | undefined;
 
   const raw = config.omnia_tools ?? config.tools;
 
@@ -149,16 +178,29 @@ export function parseConfiguredTools(config: Record<string, unknown>): OmniaTool
       } else if (parsed && typeof parsed === "object" && Array.isArray((parsed as any).tools)) {
         tools = (parsed as any).tools as OmniaToolDefinition[];
       }
-    } catch {
-      // Fallback: try JSON.parse
+    } catch (err1) {
+      // Try repaired YAML
       try {
-        const parsed = JSON.parse(raw);
+        const repaired = tryRepairYaml(raw);
+        const parsed = YAML.parse(repaired);
         if (Array.isArray(parsed)) {
           tools = parsed as OmniaToolDefinition[];
+        } else if (parsed && typeof parsed === "object" && Array.isArray((parsed as any).tools)) {
+          tools = (parsed as any).tools as OmniaToolDefinition[];
         }
       } catch {
-        // If neither parses, fall back to default tools
-        tools = [];
+        // Fallback: try JSON.parse
+        try {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            tools = parsed as OmniaToolDefinition[];
+          }
+        } catch {
+          // If neither parses, record error and fall back to default tools
+          parseErrorMessage = (err1 as Error)?.message || String(err1);
+          console.warn(`[omnia:tools] Failed to parse custom tools from omnia_tools: ${parseErrorMessage}`);
+          tools = [];
+        }
       }
     }
   } else if (Array.isArray(raw)) {
@@ -170,13 +212,42 @@ export function parseConfiguredTools(config: Record<string, unknown>): OmniaTool
     tools = JSON.parse(JSON.stringify(DEFAULT_OMNIA_TOOLS));
   }
 
-  // Normalize tools: validate names, defaults, and booleans
+  // Normalize tools: validate names, defaults, booleans, and root/access fields
   tools = tools
     .filter((t) => t && typeof t === "object" && typeof t.name === "string" && t.name.trim().length > 0)
     .map((t) => {
       const normalizedName = t.name.trim();
       const enabled = t.enabled !== false && String(t.enabled) !== "false";
       const type: ToolType = (t.type || (normalizedName.includes("ip") ? "ip_location" : normalizedName.includes("graphql") ? "graphql" : "http_request")) as ToolType;
+
+      // Support access properties both at root level and inside nested access object
+      const rootUrl = (t as any).url as string | undefined;
+      const rootBaseUrl = (t as any).baseUrl as string | undefined;
+      const rootAllowedMethods = (t as any).allowedMethods as string[] | undefined;
+      const rootAllowedDomains = (t as any).allowedDomains as string[] | undefined;
+      const rootAllowedPaths = (t as any).allowedPaths as string[] | undefined;
+      const rootAllowPrivateNetworks = (t as any).allowPrivateNetworks as boolean | undefined;
+
+      const hasRootAccess =
+        Boolean(rootUrl) ||
+        Boolean(rootBaseUrl) ||
+        Boolean(rootAllowedMethods) ||
+        Boolean(rootAllowedDomains) ||
+        Boolean(rootAllowedPaths) ||
+        rootAllowPrivateNetworks !== undefined;
+
+      const access: ToolAccessConfig | undefined = (t.access || hasRootAccess)
+        ? {
+            url: rootUrl ?? t.access?.url,
+            baseUrl: rootBaseUrl ?? t.access?.baseUrl,
+            allowedMethods: rootAllowedMethods ?? t.access?.allowedMethods,
+            allowedDomains: rootAllowedDomains ?? t.access?.allowedDomains,
+            allowedPaths: rootAllowedPaths ?? t.access?.allowedPaths,
+            allowPrivateNetworks: rootAllowPrivateNetworks ?? t.access?.allowPrivateNetworks,
+            ...t.access,
+          }
+        : undefined;
+
       return {
         ...t,
         name: normalizedName,
@@ -184,10 +255,14 @@ export function parseConfiguredTools(config: Record<string, unknown>): OmniaTool
         description: t.description || `Tool: ${normalizedName}`,
         type,
         enabled,
-        access: t.access ? { ...t.access } : undefined,
+        access,
         auth: t.auth ? { ...t.auth } : undefined,
       };
     });
+
+  if (parseErrorMessage) {
+    (tools as any).parseError = parseErrorMessage;
+  }
 
   // If global security mode is explicitly disabled, disable all tools
   const isGloballyDisabled =
