@@ -146,6 +146,83 @@ export function getConfigSchema(): AdapterConfigSchema {
         hint: "Number of CPU threads to allocate for computation.",
       },
       {
+        key: "omnia_tools",
+        label: "OmnIA Tool Registry (YAML/JSON)",
+        type: "textarea",
+        default: `# OmnIA Tool Registry
+# Configure tools with individual access parameters and authentication.
+- name: ip_location
+  label: "IP & Geolocation Inspector"
+  description: "Inspects public IP and geographical location details."
+  type: ip_location
+  enabled: true
+
+- name: call_api_endpoint
+  label: "REST API Client"
+  description: "Executes HTTP requests to API endpoints."
+  type: http_request
+  enabled: true
+  access:
+    allowedMethods: ["GET", "POST", "PUT", "PATCH", "DELETE"]
+
+- name: query_graphql
+  label: "GraphQL Client"
+  description: "Executes GraphQL queries and mutations."
+  type: graphql
+  enabled: true
+  access:
+    allowedMethods: ["POST"]
+
+- name: inspect_api_documentation
+  label: "API Documentation Inspector"
+  description: "Inspects OpenAPI specifications or GraphQL schemas."
+  type: inspect_api
+  enabled: true
+
+# Example Custom Tool:
+# - name: github_issues
+#   label: "GitHub Issues API"
+#   description: "Query open issues from Paperclip GitHub repository"
+#   type: http_request
+#   enabled: true
+#   access:
+#     url: "https://api.github.com/repos/paperclipai/paperclip/issues"
+#     allowedMethods: ["GET"]
+#   auth:
+#     type: bearer
+#     tokenEnv: "GITHUB_TOKEN"
+`,
+        hint: "Configured tools list. Add/remove tools, enable/disable individually, define custom endpoints (url/baseUrl), allowed HTTP methods, and individual authentication (bearer, api_key, basic, hmac). Supports YAML and JSON.",
+      },
+      {
+        key: "enable_ip_tool",
+        label: "Enable IP Location Tool",
+        type: "boolean",
+        default: true,
+        hint: "Quick toggle to enable or disable IP & Geolocation inspector.",
+      },
+      {
+        key: "enable_http_tool",
+        label: "Enable REST API Tool",
+        type: "boolean",
+        default: true,
+        hint: "Quick toggle to enable or disable REST / HTTP API client.",
+      },
+      {
+        key: "enable_graphql_tool",
+        label: "Enable GraphQL Tool",
+        type: "boolean",
+        default: true,
+        hint: "Quick toggle to enable or disable GraphQL client.",
+      },
+      {
+        key: "enable_inspect_tool",
+        label: "Enable API Documentation Inspector",
+        type: "boolean",
+        default: true,
+        hint: "Quick toggle to enable or disable API documentation inspector.",
+      },
+      {
         key: "omnia_mode",
         label: "OmnIA Tool Security Mode",
         type: "select",
@@ -160,10 +237,10 @@ export function getConfigSchema(): AdapterConfigSchema {
       },
       {
         key: "omnia_allowed_domains",
-        label: "OmnIA Allowed Domains Whitelist",
+        label: "OmnIA Optional Allowed Domains",
         type: "text",
-        default: "api.ipify.org, ipwho.is, https://api.ipify.org",
-        hint: "Comma-separated list of permitted hostnames/domains (e.g. 'api.ipify.org, ipwho.is, *.github.com'). Use '*' to allow all public domains.",
+        default: "",
+        hint: "Optional domain filter (e.g. '*.github.com, api.example.com'). If empty, all public domains permitted by individual tool access rules are allowed.",
       },
       {
         key: "omnia_allowed_methods",

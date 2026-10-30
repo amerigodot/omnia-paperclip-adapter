@@ -26,6 +26,13 @@ import {
   executeOmniaOperation,
   parseOmniaPermissions,
 } from "./tools/omnia.js";
+import {
+  parseConfiguredTools,
+  getEnabledTools,
+  buildOllamaTools,
+  executeToolByName,
+  type OmniaToolDefinition,
+} from "./tools/tool-registry.js";
 import { loadOpenApiSpec, formatOpenApiDocs } from "./tools/openapi.js";
 import {
   handleSetTaskTitle,
@@ -299,42 +306,36 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   }
 
   const omniaPermissions = parseOmniaPermissions(effectiveConfig);
+  const configuredTools = parseConfiguredTools(effectiveConfig);
+  const enabledTools = getEnabledTools(configuredTools);
+  const enabledToolNames = enabledTools.map((t) => t.name);
 
   await onLog(
     "stdout",
-    `[omnia:security] Active security mode: "${omniaPermissions.mode}" | Allowed domains: [${omniaPermissions.allowedDomains.join(", ")}] | Allowed methods: [${omniaPermissions.allowedMethods.join(", ")}] | SSRF guard: ${omniaPermissions.allowPrivateNetworks ? "disabled (private networks allowed)" : "active (private networks blocked)"}\n`,
+    `[omnia:tools] Tool Registry: ${configuredTools.length} tool(s) registered (${enabledTools.length} enabled: [${enabledToolNames.join(", ")}])\n`,
+  );
+  await onLog(
+    "stdout",
+    `[omnia:security] Active security mode: "${omniaPermissions.mode}" | Allowed domains: [${omniaPermissions.allowedDomains.length > 0 ? omniaPermissions.allowedDomains.join(", ") : "*"}] | Allowed methods: [${omniaPermissions.allowedMethods.join(", ")}] | SSRF guard: ${omniaPermissions.allowPrivateNetworks ? "disabled (private networks allowed)" : "active (private networks blocked)"}\n`,
   );
 
   let defaultAgentGuidance = "";
-  if (omniaPermissions.mode === "disabled") {
+  if (enabledTools.length === 0 || omniaPermissions.mode === "disabled") {
     defaultAgentGuidance =
-      "OmnIA tool engine is currently DISABLED by security policy.\n" +
+      "OmnIA tool engine is currently DISABLED or no tools are enabled in settings.\n" +
       "- External network operations, IP lookups, REST APIs, and GraphQL tools are unavailable.\n" +
-      "- If the user requests external data, IP lookups, or network operations, politely explain that OmnIA tools are currently disabled in the security settings.";
-  } else if (omniaPermissions.mode === "read_only") {
-    defaultAgentGuidance =
-      "You are an autonomous AI worker executing tasks in Paperclip with the OmnIA tool engine in READ-ONLY mode.\n" +
-      "- Your goal is to fulfill the user's request accurately, directly, and thoughtfully.\n" +
-      "- When external data, IP/location, REST APIs, or GraphQL operations are required, invoke the OmnIA tool (`omnia` or its specialized functions `omnia_ip_location`, `omnia_http_request`, `omnia_graphql`, `omnia_inspect_docs`).\n" +
-      "- In READ-ONLY mode: GET requests, documentation inspection, and GraphQL queries are permitted. Mutating operations (POST, PUT, DELETE, PATCH, GraphQL mutations) are strictly blocked by security policy.\n" +
-      "- Pass explicit call parameters (operation, url, method, params, headers, body, query).\n" +
-      "- Once OmnIA returns the result, analyze, synthesize, and elaborate the data clearly to formulate a complete, conversational response in the language of the prompt (do not just dump raw JSON).";
-  } else if (omniaPermissions.mode === "restricted") {
-    defaultAgentGuidance =
-      `You are an autonomous AI worker executing tasks in Paperclip with the OmnIA tool engine in RESTRICTED mode.\n` +
-      `- Permitted domains: [${omniaPermissions.allowedDomains.join(", ")}]. Permitted methods: [${omniaPermissions.allowedMethods.join(", ")}].\n` +
-      `- Calls to endpoints outside permitted domains or with non-permitted methods will be rejected by security policy.\n` +
-      `- When external data or API operations are required, invoke the OmnIA tool (\`omnia\` or its specialized functions) targeting ONLY permitted domains.\n` +
-      `- Once OmnIA returns the result, analyze, synthesize, and elaborate the data clearly to formulate a complete, conversational response in the language of the prompt.`;
+      "- If the user requests external data, IP lookups, or network operations, politely explain that tools are currently disabled in agent settings.";
   } else {
-    // Permissive
+    const toolListSummary = enabledTools
+      .map((t) => `- \`${t.name}\`: ${t.description}${t.access?.url ? ` (Target: ${t.access.url})` : ""}`)
+      .join("\n");
+
     defaultAgentGuidance =
       "You are an autonomous AI worker executing tasks in Paperclip with the OmnIA tool engine.\n" +
       "- Your goal is to fulfill the user's request accurately, directly, and thoughtfully.\n" +
-      "- When external data, IP/location, REST APIs, or GraphQL operations are required, invoke the OmnIA tool (`omnia` or its specialized functions `omnia_ip_location`, `omnia_http_request`, `omnia_graphql`, `omnia_inspect_docs`).\n" +
-      "- Pass explicit call parameters (operation, url, method, params, headers, body, query).\n" +
-      "- OmnIA calls are protected by an SSRF safety guard against private networks.\n" +
-      "- Once OmnIA returns the result, analyze, synthesize, and elaborate the data clearly to formulate a complete, conversational response in the language of the prompt (do not just dump raw JSON).";
+      `- You have access to the following ${enabledTools.length} enabled tool(s):\n${toolListSummary}\n` +
+      "- When external data or operations are required, invoke the appropriate tool with explicit call parameters.\n" +
+      "- Once a tool returns the result, analyze, synthesize, and elaborate the data clearly to formulate a complete, conversational response in the language of the prompt (do not just dump raw JSON).";
   }
 
   systemPrompt = systemPrompt
@@ -346,13 +347,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   messages.push({ role: "user", content: promptText });
 
   // 3. Prepare request payload and tools with OmnIA suite
-  const tools: unknown[] = [];
-  if (omniaPermissions.mode !== "disabled") {
-    tools.push(...OMNIA_TOOLS);
-    // Legacy tool definitions for backward compatibility
-    tools.push(IP_LOCATION_TOOL_DEFINITION);
-    tools.push(...GENERIC_API_TOOLS);
-  }
+  const tools: unknown[] = buildOllamaTools(configuredTools);
 
   // Pre-load OpenAPI documentation if configured
   const openApiSpecSource = asString(config.openapi_spec_url || config.openapi_spec_file, "").trim();
@@ -564,24 +559,17 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
         let toolResult: unknown;
         try {
-          if (toolName === "omnia") {
-            toolResult = await executeOmniaOperation(args, effectiveConfig);
-          } else if (toolName === "omnia_ip_location" || toolName === "get_ip_location") {
-            toolResult = await executeOmniaOperation({ ...args, operation: "ip_location" }, effectiveConfig);
-          } else if (toolName === "omnia_http_request" || toolName === "call_api_endpoint") {
-            toolResult = await executeOmniaOperation({ ...args, operation: "http_request" }, effectiveConfig);
-          } else if (toolName === "omnia_graphql" || toolName === "query_graphql") {
-            toolResult = await executeOmniaOperation({ ...args, operation: "graphql_query" }, effectiveConfig);
-          } else if (toolName === "omnia_inspect_docs" || toolName === "inspect_api_documentation") {
-            toolResult = await executeOmniaOperation({ ...args, operation: "inspect_api" }, effectiveConfig);
-          } else if (toolName === "set_task_title") {
+          if (toolName === "set_task_title") {
             toolResult = await handleSetTaskTitle(args, {
               issueId,
               apiUrl,
               authToken,
             });
+          } else if (toolName === "omnia") {
+            toolResult = await executeOmniaOperation(args, effectiveConfig);
           } else {
-            toolResult = { error: `Tool "${toolName}" is not recognized by OmnIA.` };
+            // Dispatches to the Tool Registry (handles name lookup, enabled check, access validation, auth injection)
+            toolResult = await executeToolByName(toolName, args, configuredTools, effectiveConfig);
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);

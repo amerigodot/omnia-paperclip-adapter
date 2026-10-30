@@ -17,10 +17,12 @@
   "scripts": {
     "build": "tsc",
     "clean": "rm -rf dist",
+    "test": "tsx --test src/server/tools/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "tsx": "^4.19.0",
     "typescript": "^7.0.2"
   },
   "engines": {

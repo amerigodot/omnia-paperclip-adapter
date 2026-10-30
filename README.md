@@ -21,6 +21,73 @@ Decoupled external adapter plugin for **Paperclip** that enables sovereign, loca
 
 ---
 
+## Granular Tool Registry (`omnia_tools`)
+
+Rather than relying on a rigid global domain whitelist, OmnIA uses a **declarative Tool Registry** (supported in both **YAML** and **JSON**).
+
+This enables:
+1. **Clear Tool Identification**: Each tool has an explicit name, human-readable label, and LLM guidance description.
+2. **Add / Remove Tools**: Add arbitrary new API endpoints or remove unwanted default tools.
+3. **Enable / Disable Toggles**: Toggle individual tools on/off (`enabled: true | false`) without deleting their configuration. Disabled tools are excluded from the model prompt and rejected if invoked.
+4. **Individual Access Parameters**:
+   - `url` or `baseUrl`: Pinned target endpoint URL or permitted base URL prefix.
+   - `allowedMethods`: Permitted HTTP methods specifically for that tool (e.g. `["GET"]` for read-only, `["POST"]` for webhooks).
+   - `allowedPaths`: Optional path pattern whitelist.
+   - `timeoutMs`: Tool-specific timeout.
+5. **Individual Authentication**: Configure credentials per tool (`bearer`, `api_key`, `basic`, `hmac`), resolving from environment variables (`tokenEnv`, `keyEnv`) or direct values.
+6. **No Mandatory Whitelist**: Public targets can be accessed cleanly based on tool configuration without requiring an arbitrary non-empty global domain whitelist.
+
+### Example Tool Registry Configuration (YAML)
+
+```yaml
+# 1. IP Location Inspector
+- name: ip_location
+  label: "IP & Geolocation Inspector"
+  description: "Inspects public IP and geographical location details."
+  type: ip_location
+  enabled: true
+
+# 2. General REST API Client
+- name: call_api_endpoint
+  label: "REST API Client"
+  description: "Executes HTTP requests to API endpoints."
+  type: http_request
+  enabled: true
+  access:
+    allowedMethods: ["GET", "POST", "PUT", "PATCH", "DELETE"]
+
+# 3. Dedicated GitHub Issues Tool (Individual Auth & Scoped URL)
+- name: get_github_issues
+  label: "GitHub Issues Reader"
+  description: "Query open issues and PRs from Paperclip repository."
+  type: http_request
+  enabled: true
+  access:
+    url: "https://api.github.com/repos/paperclipai/paperclip/issues"
+    allowedMethods: ["GET"]
+  auth:
+    type: bearer
+    tokenEnv: "GITHUB_TOKEN"
+
+# 4. GraphQL Query Tool
+- name: query_graphql
+  label: "GraphQL Client"
+  description: "Executes GraphQL queries and mutations."
+  type: graphql
+  enabled: false  # Disabled: hidden from model and blocked from execution
+  access:
+    allowedMethods: ["POST"]
+
+# 5. API Documentation Inspector
+- name: inspect_api_documentation
+  label: "API Documentation Inspector"
+  description: "Inspects OpenAPI specifications or GraphQL schemas."
+  type: inspect_api
+  enabled: true
+```
+
+---
+
 ## Tools Available to Models
 
 When configured, the adapter exposes function tools to models that support function calling (`qwen3:8b`, `gemma4`, `llama3.1`, etc.):

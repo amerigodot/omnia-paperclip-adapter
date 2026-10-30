@@ -79,11 +79,11 @@ export function parseOmniaPermissions(config: Record<string, unknown>): OmniaPer
       : "permissive";
 
   const rawDomains = asString(
-    config.omnia_allowed_domains ||
-    config.omniaAllowedDomains ||
-    config.allowed_domains ||
+    config.omnia_allowed_domains ??
+    config.omniaAllowedDomains ??
+    config.allowed_domains ??
     config.allowedDomains,
-    "api.ipify.org, ipwho.is",
+    "api.ipify.org, ipwho.is, *",
   );
   const allowedDomains = rawDomains
     .split(",")
@@ -167,26 +167,17 @@ export function isDomainAllowed(
     return { allowed: true, hostname };
   }
 
-  // Read-only mode allows public hosts unless custom restricted domains are explicitly configured without wildcard
-  if (permissions.mode === "read_only") {
-    if (permissions.allowedDomains.includes("*")) {
-      return { allowed: true, hostname };
-    }
-    const isDefaultList =
-      permissions.allowedDomains.length === 2 &&
-      permissions.allowedDomains.includes("api.ipify.org") &&
-      permissions.allowedDomains.includes("ipwho.is");
-    if (isDefaultList) {
-      return { allowed: true, hostname };
-    }
-  }
-
-  // Wildcard allows any public host
-  if (permissions.allowedDomains.includes("*")) {
+  // If no allowedDomains specified or wildcard is present, allow all public hosts
+  if (permissions.allowedDomains.length === 0 || permissions.allowedDomains.includes("*")) {
     return { allowed: true, hostname };
   }
 
-  // Check against domain whitelist (strictly applied in Restricted mode)
+  // Read-only mode allows public hosts unless custom restricted domains are explicitly configured
+  if (permissions.mode === "read_only") {
+    return { allowed: true, hostname };
+  }
+
+  // Check against domain whitelist (strictly applied in Restricted mode when non-empty)
   const isMatch = permissions.allowedDomains.some((d) => {
     if (d === hostname) return true;
     if (d.startsWith("*.") && hostname.endsWith(d.slice(1))) return true;
@@ -277,8 +268,8 @@ export async function executeOmniaOperation(
 
   // 1. IP Location Operation
   if (operation === "ip_location") {
-    // In restricted mode, ensure IP discovery domains are whitelisted
-    if (permissions.mode === "restricted") {
+    // In restricted mode with an explicit domain whitelist, check if IP discovery is allowed
+    if (permissions.mode === "restricted" && permissions.allowedDomains.length > 0 && !permissions.allowedDomains.includes("*")) {
       const ipifyCheck = isDomainAllowed("https://api.ipify.org", permissions);
       const ipwhoCheck = isDomainAllowed("https://ipwho.is", permissions);
       if (!ipifyCheck.allowed && !ipwhoCheck.allowed) {
