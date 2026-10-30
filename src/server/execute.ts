@@ -427,11 +427,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     let finalAssistantText = "";
     let artifactSaved = false;
     let turn = 0;
-    const maxTurns = 5;
+    const maxTurns = asNumber(effectiveConfig.max_turns, 10);
 
     while (turn < maxTurns) {
       turn++;
       const isFirstTurn = turn === 1;
+      const isFinalTurn = turn === maxTurns;
 
       // Guarantee that messages always contains at least one non-empty user query.
       // This protects Qwen models whose Jinja chat template raises:
@@ -444,13 +445,18 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         });
       }
 
+      // On the final turn, restrict tools to save_artifact only to encourage report synthesis
+      const currentTools = isFinalTurn
+        ? (issueId ? [SAVE_ARTIFACT_TOOL_DEFINITION] : [])
+        : tools;
+
       const requestBody: Record<string, unknown> = {
         model,
         messages,
         stream: true,
         options,
         ...(keepAlive ? { keep_alive: keepAlive } : {}),
-        ...(tools.length > 0 ? { tools } : {}),
+        ...(currentTools.length > 0 ? { tools: currentTools } : {}),
       };
 
       if (isFirstTurn) {
@@ -670,6 +676,92 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           name: toolName,
           content: toolResultStr,
         });
+      }
+
+      // If reaching the penultimate turn, prompt the model to finalize and save its report
+      if (turn === maxTurns - 1) {
+        messages.push({
+          role: "user",
+          content: "You have gathered the necessary data. Now synthesize all findings, generate your complete structured Security Advisory Report in markdown, and save it as an artifact using `save_artifact`.",
+        });
+      }
+    }
+
+    // If the loop terminated while the last message was a tool result,
+    // invoke the model for one final synthesis pass so output is never truncated.
+    if (messages[messages.length - 1]?.role === "tool") {
+      await onLog("stdout", `[omnia] Generating final synthesis response...\n`);
+      try {
+        const synthRes = await fetch(`${host}/api/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model,
+            messages,
+            stream: true,
+            options,
+            ...(keepAlive ? { keep_alive: keepAlive } : {}),
+            ...(issueId ? { tools: [SAVE_ARTIFACT_TOOL_DEFINITION] } : {}),
+          }),
+          signal: controller.signal,
+        });
+
+        if (synthRes.ok && synthRes.body) {
+          let synthText = "";
+          let synthBuffer = "";
+          const synthReader = synthRes.body as unknown as AsyncIterable<Uint8Array>;
+          const synthDecoder = new TextDecoder("utf-8");
+          const synthToolCalls: ToolCall[] = [];
+
+          for await (const chunk of synthReader) {
+            synthBuffer += synthDecoder.decode(chunk, { stream: true });
+            let nlIdx: number;
+            while ((nlIdx = synthBuffer.indexOf("\n")) !== -1) {
+              const line = synthBuffer.slice(0, nlIdx).trim();
+              synthBuffer = synthBuffer.slice(nlIdx + 1);
+              if (!line) continue;
+              try {
+                const parsed = JSON.parse(line) as OllamaStreamChunk;
+                if (parsed.message?.content) {
+                  synthText += parsed.message.content;
+                  await onLog("stdout", parsed.message.content);
+                }
+                if (parsed.message?.tool_calls && Array.isArray(parsed.message.tool_calls)) {
+                  for (const tc of parsed.message.tool_calls) {
+                    synthToolCalls.push(tc);
+                  }
+                }
+              } catch {}
+            }
+          }
+
+          if (synthText.trim()) {
+            finalAssistantText = synthText.trim();
+          }
+
+          // Handle save_artifact call if invoked during synthesis pass
+          for (const tc of synthToolCalls) {
+            const tcName = tc.function?.name || "";
+            if (tcName === "save_artifact" || tcName === "upsert_document" || tcName === "create_document") {
+              let tcArgs: Record<string, unknown> = {};
+              try {
+                tcArgs = typeof tc.function.arguments === "string" ? JSON.parse(tc.function.arguments) : (tc.function.arguments || {});
+              } catch {}
+              const saveRes = await handleSaveArtifact(tcArgs, {
+                issueId,
+                apiUrl,
+                authToken,
+                workspacePath: asString(context.workspacePath || context.cwd || (runtime as any).cwd, "") || undefined,
+              });
+              if (saveRes.success) {
+                artifactSaved = true;
+                await onLog("stdout", `\n[omnia] Successfully saved artifact document "${saveRes.key}" (rev ${saveRes.revision ?? 1}).\n`);
+              }
+            }
+          }
+        }
+      } catch (err) {
+        await onLog("stderr", `[omnia] Note: Final synthesis pass failed: ${err}\n`);
       }
     }
 
