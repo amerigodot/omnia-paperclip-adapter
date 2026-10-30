@@ -117,3 +117,29 @@ export function compactToolResponse(input: unknown, maxChars = 10000): unknown {
 
   return result;
 }
+
+export interface ChatMessageLike {
+  role: string;
+  content: string;
+}
+
+/**
+ * Condenses historical tool outputs from earlier turns to prevent context explosion
+ * and avoid remote proxy timeouts (e.g. 180s socket drop / 'terminated').
+ */
+export function prunePriorToolMessages(messages: ChatMessageLike[], keepLastN = 2): void {
+  const toolIndices: number[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i].role === "tool") {
+      toolIndices.push(i);
+    }
+  }
+
+  const olderIndices = toolIndices.slice(0, Math.max(0, toolIndices.length - keepLastN));
+  for (const idx of olderIndices) {
+    const msg = messages[idx];
+    if (typeof msg.content === "string" && msg.content.length > 1500) {
+      msg.content = msg.content.slice(0, 1500) + "\n... [Remaining data already analyzed in prior turn]";
+    }
+  }
+}

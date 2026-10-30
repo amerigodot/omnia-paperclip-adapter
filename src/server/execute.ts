@@ -9,6 +9,7 @@ import {
   asStringArray,
   renderTemplate,
   compactToolResponse,
+  prunePriorToolMessages,
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
 } from "./utils.js";
 import { DEFAULT_OLLAMA_HOST, DEFAULT_OLLAMA_MODEL } from "../index.js";
@@ -472,6 +473,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         );
       }
 
+      prunePriorToolMessages(messages);
+
       const res = await fetch(`${host}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -662,7 +665,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           toolResult = { error: `OmnIA tool execution failed: ${msg}` };
         }
 
-        const maxBytes = asNumber(effectiveConfig.omnia_max_response_bytes, 10000);
+        const maxBytes = asNumber(effectiveConfig.omnia_max_response_bytes, 6000);
         const compacted = compactToolResponse(toolResult, maxBytes);
         const toolResultStr = typeof compacted === "string" ? compacted : JSON.stringify(compacted);
 
@@ -692,6 +695,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     if (messages[messages.length - 1]?.role === "tool") {
       await onLog("stdout", `[omnia] Generating final synthesis response...\n`);
       try {
+        prunePriorToolMessages(messages);
         const synthRes = await fetch(`${host}/api/chat`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
