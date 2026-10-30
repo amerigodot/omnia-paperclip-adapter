@@ -8,6 +8,7 @@ import {
   asString,
   asStringArray,
   renderTemplate,
+  compactToolResponse,
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
 } from "./utils.js";
 import { DEFAULT_OLLAMA_HOST, DEFAULT_OLLAMA_MODEL } from "../index.js";
@@ -56,6 +57,8 @@ interface ToolCall {
 interface OllamaChatMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
+  name?: string;
+  tool_call_id?: string;
   tool_calls?: ToolCall[];
 }
 
@@ -102,9 +105,9 @@ function buildOllamaOptions(config: Record<string, unknown>): Record<string, unk
   if (config.min_p !== undefined && config.min_p !== "") {
     options.min_p = asNumber(config.min_p, 0.05);
   }
-  if (config.num_ctx !== undefined && config.num_ctx !== "") {
-    options.num_ctx = asNumber(config.num_ctx, 4096);
-  }
+  options.num_ctx = config.num_ctx !== undefined && config.num_ctx !== ""
+    ? asNumber(config.num_ctx, 16384)
+    : 16384;
   if (config.num_predict !== undefined && config.num_predict !== "") {
     options.num_predict = asNumber(config.num_predict, 2048);
   }
@@ -418,6 +421,17 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       turn++;
       const isFirstTurn = turn === 1;
 
+      // Guarantee that messages always contains at least one non-empty user query.
+      // This protects Qwen models whose Jinja chat template raises:
+      // "ValueError: No user query found in messages" when context pruning or tool loops occur.
+      const hasUserMessage = messages.some((m) => m.role === "user" && typeof m.content === "string" && m.content.trim().length > 0);
+      if (!hasUserMessage) {
+        messages.splice(1, 0, {
+          role: "user",
+          content: promptText || "Analyze the tool outputs and provide a complete response.",
+        });
+      }
+
       const requestBody: Record<string, unknown> = {
         model,
         messages,
@@ -627,9 +641,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           `[omnia:tool_result] ${JSON.stringify(toolResult)}\n\n`,
         );
 
+        const maxBytes = asNumber(effectiveConfig.omnia_max_response_bytes, 15000);
+        const compacted = compactToolResponse(toolResult, maxBytes);
+        const toolResultStr = typeof compacted === "string" ? compacted : JSON.stringify(compacted);
+
         messages.push({
           role: "tool",
-          content: typeof toolResult === "string" ? toolResult : JSON.stringify(toolResult),
+          name: toolName,
+          content: toolResultStr,
         });
       }
     }
