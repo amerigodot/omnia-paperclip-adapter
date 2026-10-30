@@ -636,14 +636,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           toolResult = { error: `OmnIA tool execution failed: ${msg}` };
         }
 
-        await onLog(
-          "stdout",
-          `[omnia:tool_result] ${JSON.stringify(toolResult)}\n\n`,
-        );
-
-        const maxBytes = asNumber(effectiveConfig.omnia_max_response_bytes, 15000);
+        const maxBytes = asNumber(effectiveConfig.omnia_max_response_bytes, 10000);
         const compacted = compactToolResponse(toolResult, maxBytes);
         const toolResultStr = typeof compacted === "string" ? compacted : JSON.stringify(compacted);
+
+        await onLog(
+          "stdout",
+          `[omnia:tool_result] ${toolResultStr}\n\n`,
+        );
 
         messages.push({
           role: "tool",
