@@ -42,6 +42,13 @@ import {
 import { loadOpenApiSpec, formatOpenApiDocs } from "./tools/openapi.js";
 import {
   handleSetTaskTitle,
+  SET_TASK_TITLE_TOOL_DEFINITION,
+  SAVE_ARTIFACT_TOOL_DEFINITION,
+  handleSaveArtifact,
+  deriveTitleFromMarkdown,
+  isStructuredMarkdownReport,
+  extractReportMarkdown,
+  normalizeArtifactKey,
   markIssueDone,
 } from "./tools/paperclip-task.js";
 
@@ -370,7 +377,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       "- Your goal is to fulfill the user's request accurately, directly, and thoughtfully.\n" +
       `- You have access to the following ${enabledTools.length} enabled tool(s):\n${toolListSummary}\n` +
       "- When external data or operations are required, invoke the appropriate tool with explicit call parameters.\n" +
-      "- Once a tool returns the result, analyze, synthesize, and elaborate the data clearly to formulate a complete, conversational response in the language of the prompt (do not just dump raw JSON).";
+      "- Once a tool returns the result, analyze, synthesize, and elaborate the data clearly to formulate a complete, conversational response in the language of the prompt (do not just dump raw JSON).\n" +
+      "- When creating comprehensive reports, security audits, or persistent documentation, use the `save_artifact` tool to store the report as a persistent Paperclip artifact/document.";
   }
 
   systemPrompt = systemPrompt
@@ -383,6 +391,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   // 3. Prepare request payload and tools with OmnIA suite
   const tools: unknown[] = buildOllamaTools(configuredTools);
+  if (issueId) {
+    tools.push(SAVE_ARTIFACT_TOOL_DEFINITION);
+  }
 
   // Pre-load OpenAPI documentation if configured
   const openApiSpecSource = asString(config.openapi_spec_url || config.openapi_spec_file, "").trim();
@@ -414,6 +425,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
     let finalAssistantText = "";
+    let artifactSaved = false;
     let turn = 0;
     const maxTurns = 5;
 
@@ -625,6 +637,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
               apiUrl,
               authToken,
             });
+          } else if (toolName === "save_artifact" || toolName === "upsert_document" || toolName === "create_document") {
+            artifactSaved = true;
+            toolResult = await handleSaveArtifact(args, {
+              issueId,
+              apiUrl,
+              authToken,
+              workspacePath: asString(context.workspacePath || context.cwd || (runtime as any).cwd, "") || undefined,
+            });
           } else if (toolName === "omnia") {
             toolResult = await executeOmniaOperation(args, effectiveConfig);
           } else {
@@ -654,6 +674,39 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     }
 
     await onLog("stdout", "\n");
+
+    // Auto-promote structured markdown reports to Paperclip issue artifacts/documents
+    // if the model generated a report in its final answer without explicitly calling save_artifact
+    if (!artifactSaved && issueId && isStructuredMarkdownReport(finalAssistantText)) {
+      try {
+        const autoTitle = deriveTitleFromMarkdown(finalAssistantText) || "Security & Analysis Report";
+        const autoKey = normalizeArtifactKey(undefined, autoTitle);
+        const autoContent = extractReportMarkdown(finalAssistantText);
+        const autoResult = await handleSaveArtifact(
+          {
+            title: autoTitle,
+            content: autoContent,
+            key: autoKey,
+            changeSummary: "Auto-generated report artifact from task execution",
+          },
+          {
+            issueId,
+            apiUrl,
+            authToken,
+            workspacePath: asString(context.workspacePath || context.cwd || (runtime as any).cwd, "") || undefined,
+          },
+        );
+        if (autoResult.success) {
+          artifactSaved = true;
+          await onLog(
+            "stdout",
+            `[omnia] Automatically published markdown report as Paperclip artifact/document "${autoResult.key}" (rev ${autoResult.revision ?? 1}).\n`,
+          );
+        }
+      } catch (err) {
+        await onLog("stderr", `[omnia] Note: Auto-publish artifact skipped: ${err}\n`);
+      }
+    }
 
     // Automatically transition issue status to 'done' when substantive output was produced.
     // This prevents Paperclip's recovery worker from triggering retry cascades (disposition_repair).
