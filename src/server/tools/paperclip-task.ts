@@ -27,7 +27,7 @@ export const SAVE_ARTIFACT_TOOL_DEFINITION = {
   type: "function",
   function: {
     name: "save_artifact",
-    description: "Saves or updates a persistent markdown report, document, or artifact on the current Paperclip task/issue. The document will be visible in the task overview, the Artifacts tab, and the conversation thread.",
+    description: "Publishes or updates a persistent markdown report, document, or artifact on the current Paperclip task/issue. You can provide title and key; the markdown report is automatically attached if content is omitted.",
     parameters: {
       type: "object",
       properties: {
@@ -37,18 +37,17 @@ export const SAVE_ARTIFACT_TOOL_DEFINITION = {
         },
         content: {
           type: "string",
-          description: "The complete markdown body of the document or report",
+          description: "Optional: the complete markdown body. If omitted, the full structured report from your response is automatically captured.",
         },
         key: {
           type: "string",
-          description: "Unique slug identifier for the document (e.g. 'security-report', 'audit-report', 'summary'). Lowercase letters, numbers, hyphens or underscores only (max 64 chars). Defaults to a slug derived from title.",
+          description: "Unique slug identifier for the document (e.g. 'security-report', 'audit-report', 'summary'). Lowercase letters, numbers, hyphens or underscores only (max 64 chars). Defaults to 'security-report'.",
         },
         changeSummary: {
           type: "string",
           description: "Brief note describing the revision or changes (e.g. 'Initial security audit report')",
         },
       },
-      required: ["title", "content"],
     },
   },
 };
@@ -116,6 +115,7 @@ export interface SaveArtifactOptions {
   apiUrl?: string;
   authToken?: string;
   workspacePath?: string | null;
+  fallbackContent?: string | null;
 }
 
 export async function handleSaveArtifact(
@@ -130,14 +130,14 @@ export async function handleSaveArtifact(
   filePath?: string;
   error?: string;
 }> {
-  const content = typeof args.content === "string" && args.content.trim()
+  let content = typeof args.content === "string" && args.content.trim()
     ? args.content.trim()
     : typeof args.body === "string" && args.body.trim()
       ? args.body.trim()
-      : "";
+      : (opts.fallbackContent ? extractReportMarkdown(opts.fallbackContent) : "");
 
   if (!content) {
-    return { success: false, error: "Content/body must not be empty" };
+    return { success: false, error: "Content/body must not be empty (no report content found)" };
   }
 
   const derivedTitle = deriveTitleFromMarkdown(content);

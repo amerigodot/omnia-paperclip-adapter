@@ -653,6 +653,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
               apiUrl,
               authToken,
               workspacePath: asString(context.workspacePath || context.cwd || (runtime as any).cwd, "") || undefined,
+              fallbackContent: finalAssistantText || turnAssistantText,
             });
           } else if (toolName === "omnia") {
             toolResult = await executeOmniaOperation(args, effectiveConfig);
@@ -756,6 +757,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
                 apiUrl,
                 authToken,
                 workspacePath: asString(context.workspacePath || context.cwd || (runtime as any).cwd, "") || undefined,
+                fallbackContent: finalAssistantText || synthText,
               });
               if (saveRes.success) {
                 artifactSaved = true;
