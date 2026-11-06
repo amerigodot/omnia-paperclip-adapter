@@ -1,4 +1,4 @@
-import { describe, it } from "node:test";
+import { describe, it, beforeAll as before, afterAll as after } from "vitest";
 import assert from "node:assert/strict";
 import {
   parseOmniaPermissions,
@@ -16,6 +16,41 @@ import {
 } from "./omnia-icons.js";
 
 describe("OmnIA Tool Suite - Permissions & Parameters", () => {
+  const originalFetch = globalThis.fetch;
+
+  before(() => {
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("ipify.org")) {
+        return new Response(JSON.stringify({ ip: "93.45.67.89" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.includes("ipwho.is")) {
+        return new Response(
+          JSON.stringify({
+            ip: "8.8.8.8",
+            success: true,
+            type: "IPv4",
+            country: "United States",
+            country_code: "US",
+            region: "California",
+            city: "Mountain View",
+            postal: "94043",
+            latitude: 37.4223,
+            longitude: -122.0848,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return originalFetch(input);
+    }) as typeof fetch;
+  });
+
+  after(() => {
+    globalThis.fetch = originalFetch;
+  });
   it("parses default permissions in permissive mode", () => {
     const permissions = parseOmniaPermissions({});
     assert.equal(permissions.mode, "permissive");

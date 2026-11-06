@@ -5,10 +5,10 @@ export function getConfigSchema(): AdapterConfigSchema {
     fields: [
       {
         key: "baseUrl",
-        label: "Ollama Host",
+        label: "OmnIA Endpoint URL",
         type: "text",
-        default: "http://127.0.0.1:11434",
-        hint: "Ollama daemon endpoint URL (default: http://127.0.0.1:11434).",
+        default: "https://api.ntv.cloud2local.com/omnia/api",
+        hint: "Remote OmnIA host endpoint (default: https://api.ntv.cloud2local.com/omnia/api).",
       },
       {
         key: "temperature",
@@ -179,6 +179,18 @@ export function getConfigSchema(): AdapterConfigSchema {
   type: inspect_api
   enabled: true
 
+- name: git_intelligence
+  label: "Git Intelligence & Changelog Analyzer"
+  description: "Analyzes git history, generates branch changelogs, evaluates tag ranges, detects beta features, and inspects active refactorings."
+  type: git
+  enabled: true
+
+- name: gitlab_intelligence
+  label: "GitLab Intelligence & Repository Inspector"
+  description: "Deep inspection of GitLab repositories (remote API v4 & local git): branch comparison, tag releases on main, beta feature preview, active refactorings detection, merge requests, and changelog generation."
+  type: gitlab
+  enabled: true
+
 # Example Custom Tool:
 # - name: github_issues
 #   label: "GitHub Issues API"
@@ -237,7 +249,7 @@ export function getConfigSchema(): AdapterConfigSchema {
       {
         key: "omnia_allow_private_networks",
         label: "OmnIA Allow Private/Local Networks",
-        type: "boolean",
+        type: "toggle",
         default: false,
         hint: "If enabled, bypasses SSRF protection to allow localhost/private subnet requests (use with caution).",
       },

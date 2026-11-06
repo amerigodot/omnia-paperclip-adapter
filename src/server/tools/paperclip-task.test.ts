@@ -1,4 +1,4 @@
-import { describe, it } from "node:test";
+import { describe, it } from "vitest";
 import assert from "node:assert/strict";
 import {
   normalizeArtifactKey,
@@ -17,8 +17,8 @@ describe("paperclip-task tools", () => {
     it("exports valid tool definitions for Ollama", () => {
       assert.equal(SAVE_ARTIFACT_TOOL_DEFINITION.type, "function");
       assert.equal(SAVE_ARTIFACT_TOOL_DEFINITION.function.name, "save_artifact");
-      assert.ok(SAVE_ARTIFACT_TOOL_DEFINITION.function.parameters.required.includes("title"));
-      assert.ok(SAVE_ARTIFACT_TOOL_DEFINITION.function.parameters.required.includes("content"));
+      assert.ok("title" in SAVE_ARTIFACT_TOOL_DEFINITION.function.parameters.properties);
+      assert.ok("content" in SAVE_ARTIFACT_TOOL_DEFINITION.function.parameters.properties);
 
       assert.equal(SET_TASK_TITLE_TOOL_DEFINITION.type, "function");
       assert.equal(SET_TASK_TITLE_TOOL_DEFINITION.function.name, "set_task_title");

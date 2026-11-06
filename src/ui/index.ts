@@ -1,2 +1,2 @@
-export { buildOllamaLocalConfig } from "./build-config.js";
-export { parseOllamaStdoutLine } from "./parse-stdout.js";
+export { buildOllamaLocalConfig, buildOllamaLocalConfig as buildOmniaConfig } from "./build-config.js";
+export { parseOllamaStdoutLine, parseOllamaStdoutLine as parseOmniaStdoutLine } from "./parse-stdout.js";

@@ -74,7 +74,7 @@ export interface ConfigFieldOption {
 export interface ConfigFieldSchema {
   key: string;
   label: string;
-  type: "text" | "number" | "select" | "textarea" | "boolean";
+  type: "text" | "number" | "select" | "textarea" | "boolean" | "toggle";
   default?: unknown;
   hint?: string;
   options?: ConfigFieldOption[];

@@ -1,375 +1,181 @@
-# OmnIA Paperclip Adapter (`omnia-paperclip-adapter`)
+# OmnIA Paperclip Adapter (`@paperclipai/adapter-omnia`)
 
-Decoupled external adapter plugin for **Paperclip** that enables sovereign, local LLM execution via **Ollama** and **OmnIA Governance & Security Engine**, featuring:
-- Full **Open WebUI-compliant** model parameter configuration.
-- Real-time streaming token output with structured tool call and tool result logging (`ui-parser.js`).
-- **OmnIA Governance & Granular Tool Registry**:
-  - Declarative Tool Registry (`omnia_tools`) in YAML/JSON with per-tool enable/disable switches.
-  - Granular access controls (pinned `url`, `baseUrl`, allowed HTTP methods, path patterns).
-  - Individual authentication schemes (`bearer`, `api_key`, `basic`, `hmac`).
-  - No mandatory domain whitelist; default SSRF safety against private networks.
-- Dual-step **IP & Geolocation inspection tool** (`get_ip_location`).
-- **Generic Custom API & Connector Tooling**:
-  - **REST / OpenAPI**: Dynamic endpoint execution (`call_api_endpoint`) with URL path interpolation, query parameters, custom headers, and payload formatting.
-  - **OpenAPI Documentation Inspection** (`inspect_api_documentation`): Loads, parses, and summarizes OpenAPI 3.x / Swagger 2.0 specifications (from remote URLs or local JSON/YAML files) into clean markdown for the model.
-  - **GraphQL**: Query and mutation execution (`query_graphql`) with variables, operation names, and headers.
-  - **GraphQL Schema Introspection** (`inspect_api_documentation`): Introspects GraphQL schemas via `__schema` to discover queries, mutations, types, arguments, and return types.
-  - **Elastic Authentication**:
-    - `bearer`: Bearer token resolved from `tokenEnv` or direct token.
-    - `api_key`: API key in header (`headerName`) or query parameter, resolved from `keyEnv` or direct key.
-    - `basic`: HTTP Basic authentication (`userEnv` / `passEnv`).
-    - `hmac`: HMAC signature (`secretEnv`, algorithm `sha256` | `sha512`) with automatic `X-Timestamp` and `X-Signature` generation.
+Sovereign AI Engine and Granular Governance Connector for **Paperclip**.
+Connects Paperclip agents to remote sovereign LLM clusters (e.g. `https://api.ntv.cloud2local.com/omnia/api`) with dynamic model discovery, native streaming, per-agent dedicated tool suites, Git intelligence, and artifact generation.
 
 ---
 
-## Tool Architecture: Registry & Model Execution
+## Architecture Overview
 
-OmnIA decouples **tool governance (Control Plane)** from **model execution (Runtime)**:
+OmnIA decouples **governance and tool policies** (Control Plane) from **model inference** (Remote Sovereign Runtime):
 
 ```
-┌────────────────────────────────────────────────────────┐
-│             Tool Registry (omnia_tools)                 │
-│  - Declare tools (built-in or custom)                  │
-│  - Individual enable/disable toggles                   │
-│  - Dedicated access parameters (URL, allowed methods)  │
-│  - Individual credentials (Bearer, API Key, Basic)     │
-└───────────────────────────┬────────────────────────────┘
-                            │
-              Filters only enabled tools
-                            ▼
-┌────────────────────────────────────────────────────────┐
-│             Model Function-Calling Runtime             │
-│  - Only active tools are exposed to Ollama (qwen3, ...)│
-│  - Model calls tool by name with arguments             │
-│  - OmnIA injects credentials & enforces permissions    │
-└────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│                   OmnIA Control Plane (Paperclip UI & Server)           │
+│  - Remote Endpoint: https://api.ntv.cloud2local.com/omnia/api           │
+│  - Dynamic Model Discovery via /tags endpoint                          │
+│  - Per-Agent Tool Registry & Execution Modes (Permissive, Read-Only)   │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │ Tool Invocations & Streaming Chat
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                   OmnIA Runtime & Dedicated Tool Suite                 │
+│  - Git Intelligence: Branch changelogs, tag ranges, beta refactors     │
+│  - Artifact Publisher: Markdown reports & security audit artifacts    │
+│  - IP & Geolocation: Public egress IP & datacenter verification        │
+│  - REST & GraphQL Client: Dynamic HTTP / GraphQL introspection        │
+│  - OpenAPI Inspector: Live schema loading & route summarization       │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-### 1. Declarative Tool Registry (`omnia_tools`)
+## Deployment & Setup Guide
 
-Rather than relying on a rigid global domain whitelist, OmnIA uses a **declarative Tool Registry** (supported in both **YAML** and **JSON**).
-
-This enables:
-1. **Clear Tool Identification**: Each tool has an explicit name, human-readable label, and LLM guidance description.
-2. **Add / Remove Tools**: Add arbitrary new API endpoints or remove unwanted default tools.
-3. **Enable / Disable Toggles**: Toggle individual tools on/off (`enabled: true | false`) without deleting their configuration. Disabled tools are completely excluded from the model prompt and rejected if invoked.
-4. **Individual Access Parameters**:
-   - `url` or `baseUrl`: Pinned target endpoint URL or permitted base URL prefix.
-   - `allowedMethods`: Permitted HTTP methods specifically for that tool (e.g. `["GET"]` for read-only, `["POST"]` for webhooks).
-   - `allowedPaths`: Optional path pattern whitelist.
-   - `timeoutMs`: Tool-specific timeout.
-5. **Individual Authentication**: Configure credentials per tool (`bearer`, `api_key`, `basic`, `hmac`), resolving from environment variables (`tokenEnv`, `keyEnv`) or direct values.
-6. **No Mandatory Whitelist**: Public targets can be accessed cleanly based on tool configuration without requiring an arbitrary non-empty global domain whitelist.
-
-#### Example Tool Registry Configuration (YAML)
-
-```yaml
-# 1. IP Location Inspector
-- name: ip_location
-  label: "IP & Geolocation Inspector"
-  description: "Inspects public IP and geographical location details."
-  type: ip_location
-  enabled: true
-
-# 2. General REST API Client (Open endpoint discovery)
-- name: call_api_endpoint
-  label: "REST API Client"
-  description: "Executes HTTP requests to API endpoints."
-  type: http_request
-  enabled: true
-  access:
-    allowedMethods: ["GET", "POST", "PUT", "PATCH", "DELETE"]
-
-# 3. Dedicated Custom Tool: GitHub Issues (Pre-bound URL & Private Auth)
-- name: get_github_issues
-  label: "GitHub Issues Reader"
-  description: "Query open issues and PRs from Paperclip repository."
-  type: http_request
-  enabled: true
-  access:
-    url: "https://api.github.com/repos/paperclipai/paperclip/issues"
-    allowedMethods: ["GET"]
-  auth:
-    type: bearer
-    tokenEnv: "GITHUB_TOKEN"
-
-# 4. GraphQL Query Tool (Disabled in settings)
-- name: query_graphql
-  label: "GraphQL Client"
-  description: "Executes GraphQL queries and mutations."
-  type: graphql
-  enabled: false  # Disabled: completely hidden from the model prompt
-  access:
-    allowedMethods: ["POST"]
-
-# 5. API Documentation Inspector
-- name: inspect_api_documentation
-  label: "API Documentation Inspector"
-  description: "Inspects OpenAPI specifications or GraphQL schemas."
-  type: inspect_api
-  enabled: true
-```
+### Step 1: System Prerequisites
+- **Node.js**: `>= 24.11.0` (or Node.js 26)
+- **Package Manager**: `pnpm` (workspace mode)
+- **Git**: Installed and accessible in `$PATH`
+- **Remote Host**: Network connectivity to `https://api.ntv.cloud2local.com/omnia/api` (no local Ollama daemon required)
 
 ---
 
-### 2. Runtime: What Models See & Invocations
+### Step 2: Build the OmnIA Adapter Package
 
-When an agent runs, OmnIA projects **only the enabled tools** into Ollama's function-calling schema. The model then invokes tools using structured JSON arguments.
-
-Below are the invocation signatures for the primary tool engines:
-
-#### A. Dedicated / Scoped REST Tool (e.g. `get_github_issues`)
-When a tool has a pre-bound URL and auth configured in the Registry, the model invocation is simple and safe—the model does not need to know the target URL or authentication secret:
-
-```json
-{
-  "name": "get_github_issues",
-  "arguments": {
-    "params": {
-      "state": "open",
-      "per_page": 5
-    }
-  }
-}
-```
-*OmnIA automatically resolves `GITHUB_TOKEN`, attaches `Authorization: Bearer ...`, calls `https://api.github.com/repos/paperclipai/paperclip/issues`, and returns the parsed result.*
-
-#### B. General REST Tool (`call_api_endpoint`)
-For open REST execution across permitted endpoints:
-
-```json
-{
-  "name": "call_api_endpoint",
-  "arguments": {
-    "url": "https://api.github.com/repos/{owner}/{repo}/issues",
-    "method": "GET",
-    "path_params": {
-      "owner": "paperclipai",
-      "repo": "paperclip"
-    },
-    "query_params": {
-      "state": "open",
-      "per_page": 5
-    }
-  }
-}
-```
-
-#### C. GraphQL Tool (`query_graphql`)
-Executes a GraphQL query or mutation:
-
-```json
-{
-  "name": "query_graphql",
-  "arguments": {
-    "url": "https://countries.trevorblades.com/graphql",
-    "query": "query GetCountry($code: ID!) { country(code: $code) { name capital currency emoji } }",
-    "variables": {
-      "code": "IT"
-    }
-  }
-}
-```
-
-#### D. Schema Inspector (`inspect_api_documentation`)
-Inspects and summarizes OpenAPI (Swagger) specifications or GraphQL schemas:
-
-```json
-// For OpenAPI (Swagger):
-{
-  "name": "inspect_api_documentation",
-  "arguments": {
-    "type": "openapi",
-    "source": "https://petstore.swagger.io/v2/swagger.json",
-    "filter": "pet"
-  }
-}
-
-// For GraphQL:
-{
-  "name": "inspect_api_documentation",
-  "arguments": {
-    "type": "graphql",
-    "source": "https://api.spacex.land/graphql",
-    "filter": "launch"
-  }
-}
-```
-
-#### E. IP & Geolocation Inspector (`ip_location`)
-Inspects current connection IP and geographical location:
-
-```json
-{
-  "name": "ip_location",
-  "arguments": {
-    "ip": "myip"
-  }
-}
-```
-
----
-
-## Security Modes
-
-OmnIA provides 4 operational security tiers:
-
-| Mode | Allowed HTTP Methods | Domain Policy | Tool Calls Permitted |
-|---|---|---|---|
-| `permissive` | All (`GET`, `POST`, `PUT`, `DELETE`, `PATCH`, GraphQL queries & mutations) | Any domain | All |
-| `read_only` | Safe methods only (`GET`, `HEAD`, `OPTIONS`, GraphQL queries) | Any domain | Read-only |
-| `restricted` | Safe methods only (`GET`, `HEAD`, `OPTIONS`, GraphQL queries) | Whitelist only (`allowedDomains`) | Read-only on whitelisted domains |
-| `disabled` | None | None | None (all tool invocations blocked) |
-
----
-
-## Authentication Schemes
-
-| Scheme | Config Schema | Resulting Header / Parameter |
-|---|---|---|
-| **Bearer** | `{ "type": "bearer", "tokenEnv": "VAR_NAME" }` | `Authorization: Bearer <token>` |
-| **API Key (Header)** | `{ "type": "api_key", "headerName": "X-API-Key", "keyEnv": "VAR_NAME" }` | `X-API-Key: <key>` |
-| **API Key (Query)** | `{ "type": "api_key", "in": "query", "paramName": "key", "keyEnv": "VAR_NAME" }` | `?key=<key>` |
-| **Basic** | `{ "type": "basic", "userEnv": "USER_VAR", "passEnv": "PASS_VAR" }` | `Authorization: Basic <base64>` |
-| **HMAC** | `{ "type": "hmac", "secretEnv": "SECRET_VAR", "algorithm": "sha256" }` | `X-Timestamp: <ts>`<br>`X-Signature: sha256=<hex>` |
-
----
-
-## Installation & Paperclip Integration
-
-Paperclip allows decoupled external adapters to reside anywhere on disk or in remote registries. Choose one of the following methods:
-
-### Method A: Declarative via `~/.paperclip/adapter-plugins.json` (Recommended for Local Dev & Docker)
-Paperclip persists external adapters in `~/.paperclip/adapter-plugins.json`. Clone or copy this repository to any folder on your machine (completely outside Paperclip), build it, and register its absolute path:
+From the repository root:
 
 ```bash
-git clone https://github.com/amerigodot/omnia-paperclip-adapter.git
-cd omnia-paperclip-adapter
-npm install
-npm run build
+# Navigate to the adapter package directory
+cd paperclip/packages/adapters/omnia
+
+# Install dependencies (workspace-linked)
+pnpm install
+
+# Compile TypeScript to dist/
+pnpm build
+
+# Run the test suite (84 automated tests)
+pnpm test
 ```
 
-Then add the entry to `~/.paperclip/adapter-plugins.json`:
+The package produces independent CJS/ESM artifacts in `dist/`, including `dist/ui-parser.js` for real-time streaming tool execution logs.
 
-```json
-[
-  {
-    "packageName": "omnia-paperclip-adapter",
-    "localPath": "/absolute/path/to/omnia-paperclip-adapter",
-    "type": "omnia"
-  }
-]
+---
+
+### Step 3: Run the Paperclip Daemon
+
+In the root of the project:
+
+```bash
+# Run Paperclip server and UI (runs Vite + Express on http://127.0.0.1:3100)
+./run-paperclip.sh
 ```
-When Paperclip starts, the plugin loader automatically loads the adapter from `localPath`.
 
-#### Docker & Docker Compose Setup
-When running Paperclip in Docker (where `PAPERCLIP_HOME=/paperclip` and data is persisted under `./data/docker-paperclip:/paperclip`):
+Embedded PostgreSQL automatically initializes on port `54329` and the web interface becomes available at `http://127.0.0.1:3100`.
 
-1. **Build the adapter on the host**:
-   ```bash
-   cd omnia-paperclip-adapter
-   npm install && npm run build
+---
+
+### Step 4: Configure the OmnIA Adapter in Instance Settings
+
+1. Open your browser and navigate to:
    ```
-
-2. **Mount the adapter into the container** in `docker-compose.yml`:
-   ```yaml
-   services:
-     paperclip:
-       image: paperclip-local # or official Paperclip image
-       ports:
-         - "3100:3100"
-       environment:
-         - PAPERCLIP_HOME=/paperclip
-       volumes:
-         - ./data/docker-paperclip:/paperclip
-         - ./omnia-paperclip-adapter:/plugins/omnia-paperclip-adapter:ro
+   http://127.0.0.1:3100/ARG/company/settings/instance/adapters
    ```
-
-3. **Register the container path** in `./data/docker-paperclip/adapter-plugins.json`:
-   ```json
-   [
-     {
-       "packageName": "omnia-paperclip-adapter",
-       "localPath": "/plugins/omnia-paperclip-adapter",
-       "type": "omnia"
-     }
-   ]
+2. OmnIA is pinned at the very top of the Adapters list. Click **Configure** on the OmnIA card.
+3. Verify or enter the remote endpoint URL:
    ```
-   *Notice: Specify the internal container path (`/plugins/omnia-paperclip-adapter`), not the host filesystem path.*
+   https://api.ntv.cloud2local.com/omnia/api
+   ```
+4. Click **Test** (or open the dialog for auto-testing):
+   - The server probes `/tags` and `/api/tags` directly without duplicating `/api/api` paths.
+   - Live models installed on the remote sovereign host are discovered dynamically:
+     - `qwen3.8:latest` (27.3B, thinking + tools)
+     - `deepseek-r1:14b` (Reasoning & chain-of-thought)
+     - `qwen3.5:9b` (Tools + thinking)
+     - `orcarouter/Qwen3.8-27B-Uncensored:latest`
+     - `qwen3-vl:latest` (Vision-Language)
+     - `gpt-oss:20b`
+     - `qwen3-embedding:0.6b`
+5. Select your default model (e.g. `qwen3.8:latest`) and click **Save Changes**.
 
 ---
 
-### Method B: Dynamic Runtime via REST API (`/api/adapters/install`)
-If Paperclip is already running, you can register and hot-load the local adapter without manual config file edits or restarting the server:
+### Step 5: Configure Per-Agent Dedicated Tools
 
+Each agent maintains its own dedicated tool permissions without interfering with global engine settings.
+
+1. Navigate to the agent's Tools tab:
+   ```
+   http://127.0.0.1:3100/ARG/agents/:agentId/tools
+   (e.g., http://127.0.0.1:3100/ARG/agents/da/tools)
+   ```
+2. The **OmnIA Dedicated Tools** section allows granular configuration per agent:
+   - **Git Intelligence & Changelog Analyzer** (`git_intelligence`): Generates branch diff summaries, inspects active refactoring across branches, and compares commit tag ranges.
+   - **Artifact & Report Publisher** (`save_artifact`): Directly generates and stores persistent Markdown reports in Paperclip artifacts.
+   - **IP & Geolocation Inspector** (`ip_location`): Verifies runtime environment IP and location.
+   - **REST API Client** (`call_api_endpoint`): Makes authorized HTTP requests.
+   - **GraphQL Client** (`query_graphql`): Queries and mutations.
+   - **API Documentation Inspector** (`inspect_api_documentation`): Inspects OpenAPI specs and GraphQL schemas.
+3. Select the **Execution Mode**:
+   - `permissive`: All enabled tools are executable.
+   - `read_only`: Only read-only tools and read requests (`GET`) are permitted.
+   - `restricted`: Restricts high-risk and write operations.
+4. Click **Save Tool Configuration**. Changes are saved directly to `agent.adapterConfig`.
+
+---
+
+### Step 6: Connectors & App Directory
+
+1. Navigate to:
+   ```
+   http://127.0.0.1:3100/ARG/apps
+   ```
+2. **OmnIA Engine** is pinned at the top of the connectors directory with the **Pinned Engine** badge.
+3. Clicking **Configure** redirects directly to the adapter management suite.
+
+---
+
+## Production Deployment Checklist
+
+For headless servers and production deployments:
+
+### Environment Variables
+Configure the following in `/etc/environment` or your `.env` file:
 ```bash
-curl -X POST http://127.0.0.1:3100/api/adapters/install \
-  -H "Content-Type: application/json" \
-  -d '{
-    "packageName": "/absolute/path/to/omnia-paperclip-adapter",
-    "isLocalPath": true
-  }'
+# Paperclip Port
+PORT=3100
+HOST=127.0.0.1
+
+# OmnIA Remote Sovereign Host
+PAPERCLIP_OMNIA_HOST=https://api.ntv.cloud2local.com/omnia/api
+OMNIA_KEY=your_optional_bearer_token
+
+# Storage and Database paths
+PAPERCLIP_INSTANCE_DIR=/Users/amerigodimaria/.paperclip/instances/default
 ```
 
-Paperclip validates `package.json`, updates `adapter-plugins.json`, and loads the `omnia` adapter type immediately into memory.
-
-> [!IMPORTANT]
-> **Docker Recommendations for Method B:**
-> - **Internal container path only**: In Docker environments, `packageName` must point to the path **inside the container** (e.g. `"/plugins/omnia-paperclip-adapter"`), never the host machine path (e.g. `/Users/...` or `C:\...`).
-> - **Pre-mount required**: The adapter directory must already be mounted or copied into the container filesystem before executing the curl command.
-> - **Persistent volume requirement**: Ensure `PAPERCLIP_HOME` is mounted to a persistent Docker volume, otherwise dynamic registrations will not survive container recreation.
-
----
-
-### Method C: via npm / Remote Registry (Production & Multi-Machine)
-If published to npm or an internal/private package registry:
-
+### Process Management with Systemd or PM2
+To keep Paperclip running persistently:
 ```bash
-curl -X POST http://127.0.0.1:3100/api/adapters/install \
-  -H "Content-Type: application/json" \
-  -d '{
-    "packageName": "omnia-paperclip-adapter"
-  }'
-```
-Paperclip downloads and installs the package into `~/.paperclip/adapter-plugins/node_modules/` and registers the adapter automatically.
-
----
-
-## Agent Configuration in Paperclip
-
-```json
-{
-  "adapterType": "omnia",
-  "adapterConfig": {
-    "baseUrl": "http://127.0.0.1:11434",
-    "model": "qwen3:8b",
-    "temperature": 0.2,
-    "num_ctx": 8192,
-    "enable_ip_tool": true,
-    "enable_custom_api_tools": true,
-    "security_mode": "restricted",
-    "allowed_domains": ["api.github.com", "countries.trevorblades.com"]
-  }
-}
+# Using PM2
+pm2 start ./run-paperclip.sh --name paperclip-server
+pm2 save
+pm2 startup
 ```
 
 ---
 
-## Development & Testing
+## Unit Testing & Validation
 
+Run comprehensive tests across all packages:
 ```bash
-# Build TypeScript
-npm run build
+# Adapter unit tests
+cd paperclip/packages/adapters/omnia && pnpm test
 
-# Run Unit Tests
-npm test
+# UI integration tests
+cd paperclip/ui && npx vitest run src/pages/AgentToolsTab.test.tsx src/pages/apps/Browse.test.tsx
+
+# TypeScript typecheck
+cd paperclip/server && npx tsc -b
+cd paperclip/ui && npx vite build
 ```
-
----
-
-## License
-
-MIT License. See [LICENSE](LICENSE) for details.
-

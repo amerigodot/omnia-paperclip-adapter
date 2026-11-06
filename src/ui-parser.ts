@@ -1,14 +1,4 @@
-export interface TranscriptEntry {
-  kind: "assistant" | "thinking" | "user" | "tool_call" | "tool_result" | "system" | "stderr" | "stdout";
-  ts: string;
-  text?: string;
-  name?: string;
-  input?: unknown;
-  toolUseId?: string;
-  content?: string;
-  isError?: boolean;
-  delta?: boolean;
-}
+import type { TranscriptEntry } from "./types.js";
 
 export function parseStdoutLine(line: string, ts: string): TranscriptEntry[] {
   if (!line || !line.trim()) return [];
@@ -31,7 +21,7 @@ export function parseStdoutLine(line: string, ts: string): TranscriptEntry[] {
         },
       ];
     } catch {
-      return [{ kind: "tool_call", ts, name: "omnia", text: raw }];
+      return [{ kind: "tool_call", ts, name: "omnia", input: raw }];
     }
   }
 
@@ -44,7 +34,9 @@ export function parseStdoutLine(line: string, ts: string): TranscriptEntry[] {
       {
         kind: "tool_result",
         ts,
+        toolUseId: "call-1",
         content: raw,
+        isError: false,
       },
     ];
   }
@@ -57,5 +49,5 @@ export function parseStdoutLine(line: string, ts: string): TranscriptEntry[] {
     return [{ kind: "stderr", ts, text: trimmed }];
   }
 
-  return [{ kind: "assistant", ts, text: line }];
+  return [{ kind: "stdout", ts, text: line }];
 }

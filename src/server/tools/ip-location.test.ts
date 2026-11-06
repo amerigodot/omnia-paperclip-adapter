@@ -1,11 +1,11 @@
-import { describe, it, before, after, beforeEach } from "node:test";
+import { describe, it, beforeAll as before, afterAll as after, beforeEach } from "vitest";
 import assert from "node:assert/strict";
 import {
   getIpLocation,
   getPublicIp,
   IP_LOCATION_TOOL_DEFINITION,
-} from "./ip-location.ts";
-import { parseStdoutLine } from "../../ui-parser.ts";
+} from "./ip-location.js";
+import { parseStdoutLine } from "../../ui-parser.js";
 
 describe("Ollama IP Location Tool", () => {
   const originalFetch = globalThis.fetch;
@@ -158,7 +158,7 @@ describe("Ollama IP Location Tool", () => {
 
   describe("End-to-end execute() with Ollama tool calling", () => {
     it("handles Ollama tool call request and completes two-pass execution", async () => {
-      const { execute } = await import("../../../dist/server/execute.js");
+      const { execute } = await import("../execute.js");
       const loggedChunks: string[] = [];
       let chatCallCount = 0;
 
@@ -224,9 +224,10 @@ describe("Ollama IP Location Tool", () => {
             id: "agent-1",
             companyId: "co-1",
             name: "IP Detective",
+            adapterType: "omnia",
             adapterConfig: {},
           },
-          runtime: { sessionId: null, sessionParams: null },
+          runtime: { sessionId: null, sessionDisplayId: null, sessionParams: null, taskKey: null },
           config: {
             baseUrl: "http://127.0.0.1:11434",
             model: "qwen3:8b",
@@ -246,9 +247,9 @@ describe("Ollama IP Location Tool", () => {
         assert.strictEqual(result.usage?.outputTokens, 34);
 
         const joinedLogs = loggedChunks.join("");
-        assert.ok(joinedLogs.includes("[ollama_local:tool_call]"));
+        assert.ok(joinedLogs.includes("[omnia:tool_call]") || joinedLogs.includes("[ollama_local:tool_call]"));
         assert.ok(joinedLogs.includes('"name":"get_ip_location"'));
-        assert.ok(joinedLogs.includes("[ollama_local:tool_result]"));
+        assert.ok(joinedLogs.includes("[omnia:tool_result]") || joinedLogs.includes("[ollama_local:tool_result]"));
         assert.ok(joinedLogs.includes("Mountain View"));
         assert.ok(joinedLogs.includes("L'indirizzo IP 8.8.8.8 corrisponde a Mountain View"));
       } finally {

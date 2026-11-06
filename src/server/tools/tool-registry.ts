@@ -13,9 +13,11 @@ import {
   type GraphQLExecutionResult,
 } from "./graphql.js";
 import { resolveAuth, type AuthConfig } from "./auth.js";
+import { executeGitIntelligence, GIT_INTELLIGENCE_TOOL_DEFINITION, type GitToolResult } from "./git-intelligence.js";
+import { executeGitLabIntelligence, GITLAB_INTELLIGENCE_TOOL_DEFINITION } from "./gitlab-intelligence.js";
 import { asString, asNumber } from "../utils.js";
 
-export type ToolType = "ip_location" | "http_request" | "graphql" | "inspect_api" | "custom";
+export type ToolType = "ip_location" | "http_request" | "graphql" | "inspect_api" | "git" | "gitlab" | "custom";
 
 export type ToolAuthType = "none" | "bearer" | "api_key" | "basic" | "hmac";
 
@@ -129,6 +131,20 @@ export const DEFAULT_OMNIA_TOOLS: OmniaToolDefinition[] = [
     type: "inspect_api",
     enabled: true,
   },
+  {
+    name: "git_intelligence",
+    label: "Git Intelligence & Changelog Analyzer",
+    description: "Analyzes git history, generates branch changelogs, evaluates tag ranges, detects beta features, and inspects active refactorings.",
+    type: "git",
+    enabled: true,
+  },
+  {
+    name: "gitlab_intelligence",
+    label: "GitLab Intelligence & Repository Inspector",
+    description: "Deep inspection of GitLab repositories (remote API v4 & local git): branch comparison, tag releases on main, beta feature preview, active refactorings detection, merge requests, pipeline health, and structured changelog generation.",
+    type: "gitlab",
+    enabled: true,
+  },
 ];
 
 /**
@@ -218,7 +234,13 @@ export function parseConfiguredTools(config: Record<string, unknown>): OmniaTool
     .map((t) => {
       const normalizedName = t.name.trim();
       const enabled = t.enabled !== false && String(t.enabled) !== "false";
-      const type: ToolType = (t.type || (normalizedName.includes("ip") ? "ip_location" : normalizedName.includes("graphql") ? "graphql" : "http_request")) as ToolType;
+      const type: ToolType = (t.type || (
+        normalizedName.includes("ip") ? "ip_location" :
+        normalizedName.includes("graphql") ? "graphql" :
+        normalizedName.includes("gitlab") ? "gitlab" :
+        normalizedName.includes("git") ? "git" :
+        "http_request"
+      )) as ToolType;
 
       // Support access properties both at root level and inside nested access object
       const rootUrl = (t as any).url as string | undefined;
@@ -303,6 +325,16 @@ export function buildOllamaTools(tools: OmniaToolDefinition[]): unknown[] {
           parameters: tool.parametersSchema,
         },
       });
+      continue;
+    }
+
+    if (tool.name === "gitlab_intelligence" || tool.type === "gitlab") {
+      definitions.push(GITLAB_INTELLIGENCE_TOOL_DEFINITION);
+      continue;
+    }
+
+    if (tool.name === "git_intelligence" || tool.type === "git") {
+      definitions.push(GIT_INTELLIGENCE_TOOL_DEFINITION);
       continue;
     }
 
@@ -585,6 +617,10 @@ export async function executeToolByName(
       tool = tools.find((t) => t.type === "graphql");
     } else if (name === "inspect_api" || name === "omnia_inspect_docs") {
       tool = tools.find((t) => t.type === "inspect_api");
+    } else if (name === "gitlab" || name === "gitlab_intelligence" || name === "gitlab_inspector" || name === "omnia_gitlab" || name === "gitlab_repo_inspector") {
+      tool = tools.find((t) => t.type === "gitlab" || t.name === "gitlab_intelligence");
+    } else if (name === "git" || name === "git_intelligence" || name === "git_inspector" || name === "omnia_git") {
+      tool = tools.find((t) => t.type === "git" || t.name === "git_intelligence");
     }
   }
 
@@ -812,6 +848,52 @@ export async function executeToolByName(
         operation: "inspect_api",
         status: "error",
         error: `API documentation inspection failed: ${err instanceof Error ? err.message : String(err)}`,
+        executionMs: Date.now() - startTime,
+      };
+    }
+  }
+
+  // 5. Git Intelligence Tool
+  if (tool.type === "git" || tool.name === "git_intelligence") {
+    try {
+      const res = await executeGitIntelligence(rawArgs, globalConfig);
+      return {
+        tool: tool.name,
+        operation: res.operation,
+        status: res.success ? "success" : "error",
+        data: res.markdown ? { markdown: res.markdown, ...((res.data as object) || {}) } : res.data,
+        error: res.error,
+        executionMs: res.executionMs,
+      };
+    } catch (err) {
+      return {
+        tool: tool.name,
+        operation: "git",
+        status: "error",
+        error: `Git intelligence operation failed: ${err instanceof Error ? err.message : String(err)}`,
+        executionMs: Date.now() - startTime,
+      };
+    }
+  }
+
+  // 6. GitLab Intelligence Tool
+  if (tool.type === "gitlab" || tool.name === "gitlab_intelligence") {
+    try {
+      const res = await executeGitLabIntelligence(rawArgs, globalConfig);
+      return {
+        tool: tool.name,
+        operation: res.operation,
+        status: res.success ? "success" : "error",
+        data: res.markdown ? { markdown: res.markdown, ...((res.data as object) || {}) } : res.data,
+        error: res.error,
+        executionMs: res.executionMs,
+      };
+    } catch (err) {
+      return {
+        tool: tool.name,
+        operation: "gitlab",
+        status: "error",
+        error: `GitLab intelligence operation failed: ${err instanceof Error ? err.message : String(err)}`,
         executionMs: Date.now() - startTime,
       };
     }

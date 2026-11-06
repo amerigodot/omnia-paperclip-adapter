@@ -1,16 +1,19 @@
 export const type = "omnia";
 export const label = "OmnIA";
 
-export const DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434";
-export const DEFAULT_OLLAMA_MODEL = "qwen2.5:7b";
+export const DEFAULT_OMNIA_ENDPOINT = "https://api.ntv.cloud2local.com/omnia/api";
+export const DEFAULT_OLLAMA_HOST = DEFAULT_OMNIA_ENDPOINT;
+export const DEFAULT_OLLAMA_MODEL = "qwen3.8:latest";
 
 export const models: Array<{ id: string; label: string }> = [
-  { id: "qwen2.5:7b", label: "Qwen 2.5 7B (Tools + Function Calling)" },
-  { id: "llama3.1:8b", label: "Llama 3.1 8B (Tools + Function Calling)" },
-  { id: "deepseek-r1:8b", label: "DeepSeek R1 8B (Thinking)" },
-  { id: "mistral-nemo:12b", label: "Mistral Nemo 12B (Tools)" },
-  { id: "qwen2.5:3b", label: "Qwen 2.5 3B" },
-  { id: "gemma2:9b", label: "Gemma 2 9B" },
+  { id: "qwen3.8:latest", label: "Qwen 3.8 (Latest, 27.3B, thinking, tools)" },
+  { id: "deepseek-r1:14b", label: "DeepSeek R1 14B (Thinking / Reasoning)" },
+  { id: "qwen3.5:9b", label: "Qwen 3.5 9B (Tools + Thinking)" },
+  { id: "orcarouter/Qwen3.8-27B-Uncensored:latest", label: "Qwen 3.8 27B Uncensored (Latest)" },
+  { id: "orcarouter/Qwen3.8-27B-Uncensored:iq3_m", label: "Qwen 3.8 27B Uncensored (IQ3_M)" },
+  { id: "qwen3-vl:latest", label: "Qwen 3 VL (Vision-Language, 8.8B)" },
+  { id: "gpt-oss:20b", label: "GPT OSS 20B (MXFP4, thinking, tools)" },
+  { id: "qwen3-embedding:0.6b", label: "Qwen 3 Embedding 0.6B" },
 ];
 
 export interface OllamaModelOptions {
@@ -88,23 +91,29 @@ export const DEFAULT_OLLAMA_OPTIONS: Required<OllamaModelOptions> = {
   typical_p: 1.0,
 };
 
-export const agentConfigurationDoc = `# ollama_local agent configuration
+export type OmniaModelOptions = OllamaModelOptions;
+export type OmniaAdapterConfig = OllamaAdapterConfig;
+export const DEFAULT_OMNIA_OPTIONS = DEFAULT_OLLAMA_OPTIONS;
 
-Adapter: ollama_local
+export const agentConfigurationDoc = `# omnia agent configuration
+
+Adapter: omnia
 
 Use when:
-- You want Paperclip to run local models through Ollama (e.g. gemma4, qwen3, llama3, deepseek-r1)
-- You want full sovereign, zero-cloud execution on your own machine
+- You want Paperclip to run sovereign models through OmnIA (Netvolution AI platform or Ollama-compatible endpoint) (e.g. qwen3.8, deepseek-r1, qwen3.5)
+- You want the built-in OmnIA Tool Suite (GitLab REST intelligence, Git changelog, IP lookup, REST/GraphQL API inspection, OSV vulnerability scanner)
 - You want granular Open WebUI-style control over model parameters (temperature, num_ctx, top_p, top_k, repeat_penalty, mirostat, etc.)
-- You want real-time streaming tokens in task run logs
+- You want real-time streaming tokens and function call inspection in task run logs
 
 Don't use when:
-- Ollama is not installed or running on the target machine
-- You require proprietary closed APIs (Claude, OpenAI) without an Ollama proxy
+- The target OmnIA / Ollama endpoint is not reachable
+- You require proprietary closed APIs (Claude, OpenAI) without an OmnIA proxy
 
 Core fields:
-- baseUrl (string, optional, default "http://127.0.0.1:11434"): Ollama daemon endpoint URL
-- model (string, required, default "qwen2.5:7b"): Installed Ollama model tag
+- baseUrl (string, optional, default "https://api.ntv.cloud2local.com/omnia/api"): OmnIA / Ollama API endpoint URL
+- model (string, required, default "qwen3.8:latest"): Installed model tag
+- omnia_tools (string, optional): YAML/JSON OmnIA Tool Registry configuring enabled tools, custom endpoints, and auth
+- omnia_mode (string, optional, default "permissive"): Security mode ("permissive", "read_only", "disabled")
 - system (string, optional): System instructions prompt override
 - instructionsFilePath (string, optional): Path to AGENTS.md markdown instructions file
 - promptTemplate (string, optional): Task prompt template
@@ -112,7 +121,7 @@ Core fields:
 
 Model Parameters (Open WebUI compliant):
 - temperature (number, 0.0 - 2.0, default 0.8): Controls randomness. Lower is deterministic, higher is creative.
-- num_ctx (number, default 4096): Context window size in tokens (e.g. 2048, 4096, 8192, 16384, 32768, 131072).
+- num_ctx (number, default 16384): Context window size in tokens (e.g. 2048, 4096, 8192, 16384, 32768, 131072).
 - num_predict (number, default 2048): Maximum tokens to generate in response (-1 for unlimited).
 - top_p (number, 0.0 - 1.0, default 0.9): Nucleus sampling threshold.
 - top_k (number, 1 - 100, default 40): Restricts sampling pool to top K probable tokens.
@@ -187,6 +196,18 @@ export {
   type OmniaCallArguments,
   type OmniaExecutionResult,
 } from "./server/tools/omnia.js";
+export {
+  DEFAULT_OMNIA_TOOLS,
+  parseConfiguredTools,
+  getEnabledTools,
+  type OmniaToolDefinition,
+  type ToolType,
+} from "./server/tools/tool-registry.js";
+export {
+  GIT_INTELLIGENCE_TOOL_DEFINITION,
+  executeGitIntelligence,
+  type GitToolResult,
+} from "./server/tools/git-intelligence.js";
 export {
   OMNIA_LOGO_DARK_SVG,
   OMNIA_LOGO_LIGHT_SVG,

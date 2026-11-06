@@ -10,6 +10,7 @@ import {
   renderTemplate,
   compactToolResponse,
   prunePriorToolMessages,
+  resolveOllamaUrl,
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
 } from "./utils.js";
 import { DEFAULT_OLLAMA_HOST, DEFAULT_OLLAMA_MODEL } from "../index.js";
@@ -89,7 +90,7 @@ interface OllamaStreamChunk {
 }
 
 function resolveHost(config: Record<string, unknown>): string {
-  const custom = asString(config.baseUrl || config.host || process.env.OLLAMA_HOST, DEFAULT_OLLAMA_HOST).trim();
+  const custom = asString(config.baseUrl || config.host || process.env.OMNIA_HOST || process.env.OLLAMA_HOST, DEFAULT_OLLAMA_HOST).trim();
   return custom.replace(/\/$/, "");
 }
 
@@ -233,11 +234,24 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   // Merge agent adapterConfig, context overrides, and runtime config to guarantee that
   // any security mode or parameter configured via UI or API is 100% authoritative.
+  const agentConfig =
+    agent?.adapterConfig && typeof agent.adapterConfig === "object"
+      ? (agent.adapterConfig as Record<string, unknown>)
+      : {};
+  const contextConfig =
+    context?.adapterConfig && typeof context.adapterConfig === "object"
+      ? (context.adapterConfig as Record<string, unknown>)
+      : {};
+
   const effectiveConfig: Record<string, unknown> = {
-    ...(agent?.adapterConfig as Record<string, unknown> || {}),
-    ...(context?.adapterConfig as Record<string, unknown> || {}),
+    ...agentConfig,
+    ...contextConfig,
     ...config,
   };
+
+  const resolvedWorkspacePath = asString(context.workspacePath || context.cwd || (runtime as any)?.cwd, "") || process.cwd();
+  if (!effectiveConfig.workspacePath) effectiveConfig.workspacePath = resolvedWorkspacePath;
+  if (!effectiveConfig.cwd) effectiveConfig.cwd = resolvedWorkspacePath;
 
   // Populate environment variables from agent configuration into process.env for tool auth resolution
   if (effectiveConfig.env && typeof effectiveConfig.env === "object") {
@@ -379,7 +393,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       `- You have access to the following ${enabledTools.length} enabled tool(s):\n${toolListSummary}\n` +
       "- When external data or operations are required, invoke the appropriate tool with explicit call parameters.\n" +
       "- Once a tool returns the result, analyze, synthesize, and elaborate the data clearly to formulate a complete, conversational response in the language of the prompt (do not just dump raw JSON).\n" +
-      "- When creating comprehensive reports, security audits, or persistent documentation, use the `save_artifact` tool to store the report as a persistent Paperclip artifact/document.";
+      "- When creating comprehensive reports, security audits, git changelogs, beta feature analysis, or persistent documentation, use the `save_artifact` tool to store the report as a persistent Paperclip artifact/document.";
   }
 
   systemPrompt = systemPrompt
@@ -475,7 +489,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
       prunePriorToolMessages(messages);
 
-      const res = await fetch(`${host}/api/chat`, {
+      const chatUrl = resolveOllamaUrl(host, "/api/chat");
+      const res = await fetch(chatUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(requestBody),
@@ -605,17 +620,17 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         (c) => c.function?.name && c.function.name !== "None" && c.function.name !== "null" && c.function.name.trim().length > 0,
       );
 
+      // Append assistant message to conversation history
+      messages.push({
+        role: "assistant",
+        content: turnAssistantText || "",
+        ...(validToolCalls.length > 0 ? { tool_calls: validToolCalls } : {}),
+      });
+
       // If no valid tools were called in this turn, execution is complete
       if (validToolCalls.length === 0) {
         break;
       }
-
-      // Append assistant message with its valid tool calls
-      messages.push({
-        role: "assistant",
-        content: turnAssistantText || "",
-        tool_calls: validToolCalls,
-      });
 
       // Execute each tool and append tool results
       for (const call of validToolCalls) {
@@ -697,7 +712,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       await onLog("stdout", `[omnia] Generating final synthesis response...\n`);
       try {
         prunePriorToolMessages(messages);
-        const synthRes = await fetch(`${host}/api/chat`, {
+        const synthUrl = resolveOllamaUrl(host, "/api/chat");
+        const synthRes = await fetch(synthUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -834,7 +850,6 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         outputTokens: totalOutputTokens,
       },
       summary: finalAssistantText,
-      reportedWorkDisposition: "done",
     };
   } catch (err) {
     if (timer && err instanceof Error && err.name === "AbortError") {

@@ -1,5 +1,5 @@
 import type { AdapterModel } from "../types.js";
-import { asString } from "./utils.js";
+import { asString, resolveOllamaUrl } from "./utils.js";
 import { DEFAULT_OLLAMA_HOST, models as fallbackModels } from "../index.js";
 
 const MODELS_CACHE_TTL_MS = 60_000;
@@ -48,55 +48,64 @@ export function getLastKnownOllamaHost(): string | null {
 }
 
 function resolveOllamaHost(customHost?: string): string {
-  const envHost = process.env.PAPERCLIP_OLLAMA_HOST || process.env.OLLAMA_HOST;
+  const envHost = process.env.PAPERCLIP_OMNIA_HOST || process.env.OMNIA_HOST || process.env.PAPERCLIP_OLLAMA_HOST || process.env.OLLAMA_HOST;
   const target = asString(customHost || envHost || lastKnownHost, DEFAULT_OLLAMA_HOST).trim();
   return target.replace(/\/$/, "");
 }
 
 export async function fetchOllamaTags(host: string): Promise<AdapterModel[]> {
-  const url = `${host}/api/tags`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 4000);
+  const candidateUrls = [
+    resolveOllamaUrl(host, "/api/tags"),
+    resolveOllamaUrl(host, "/tags"),
+  ];
+  const urls = [...new Set(candidateUrls)];
 
-  try {
-    const res = await fetch(url, {
-      method: "GET",
-      signal: controller.signal,
-      headers: { Accept: "application/json" },
-    });
+  for (const url of urls) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4000);
 
-    if (!res.ok) {
-      return [];
+    try {
+      const res = await fetch(url, {
+        method: "GET",
+        signal: controller.signal,
+        headers: { Accept: "application/json" },
+      });
+
+      if (!res.ok) {
+        continue;
+      }
+
+      const data = (await res.json()) as OllamaTagsResponse;
+      if (!data.models || !Array.isArray(data.models) || data.models.length === 0) {
+        continue;
+      }
+
+      const parsed = data.models.map((m) => {
+        const parts: string[] = [];
+        if (m.details?.parameter_size) parts.push(m.details.parameter_size);
+        if (m.details?.quantization_level) parts.push(m.details.quantization_level);
+        if (m.capabilities?.includes("thinking")) parts.push("thinking");
+        if (m.capabilities?.includes("tools")) parts.push("tools");
+
+        const extra = parts.length > 0 ? ` (${parts.join(", ")})` : "";
+        return {
+          id: m.name,
+          label: `${m.name}${extra}`,
+        };
+      });
+
+      if (parsed.length > 0) {
+        recordActiveOllamaHost(host, parsed);
+        return parsed;
+      }
+    } catch {
+      // try next candidate
+    } finally {
+      clearTimeout(timer);
     }
-
-    const data = (await res.json()) as OllamaTagsResponse;
-    if (!data.models || !Array.isArray(data.models) || data.models.length === 0) {
-      return [];
-    }
-
-    const parsed = data.models.map((m) => {
-      const parts: string[] = [];
-      if (m.details?.parameter_size) parts.push(m.details.parameter_size);
-      if (m.details?.quantization_level) parts.push(m.details.quantization_level);
-      if (m.capabilities?.includes("thinking")) parts.push("thinking");
-      if (m.capabilities?.includes("tools")) parts.push("tools");
-
-      const extra = parts.length > 0 ? ` (${parts.join(", ")})` : "";
-      return {
-        id: m.name,
-        label: `${m.name}${extra}`,
-      };
-    });
-
-    if (parsed.length > 0) {
-      recordActiveOllamaHost(host, parsed);
-    }
-    return parsed;
-  } catch {
-    return [];
-  } finally {
-    clearTimeout(timer);
   }
+
+  return [];
 }
 
 export interface ResolvedModelResult {

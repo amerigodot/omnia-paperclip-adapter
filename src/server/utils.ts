@@ -143,3 +143,17 @@ export function prunePriorToolMessages(messages: ChatMessageLike[], keepLastN = 
     }
   }
 }
+
+/**
+ * Resolves an Ollama/OmnIA API endpoint against a host URL, correctly handling cases
+ * where the host URL already contains the `/api` prefix (such as `https://api.ntv.cloud2local.com/omnia/api`)
+ * to prevent double prefixes like `/api/api/tags` or `/api/api/chat`.
+ */
+export function resolveOllamaUrl(host: string, path: string): string {
+  const cleanHost = host.trim().replace(/\/+$/, "");
+  const cleanPath = path.startsWith("/") ? path : `/${path}`;
+  if (cleanHost.endsWith("/api") && cleanPath.startsWith("/api/")) {
+    return `${cleanHost}${cleanPath.slice(4)}`;
+  }
+  return `${cleanHost}${cleanPath}`;
+}

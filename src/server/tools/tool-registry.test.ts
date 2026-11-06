@@ -1,4 +1,4 @@
-import { describe, it } from "node:test";
+import { describe, it } from "vitest";
 import assert from "node:assert/strict";
 import {
   parseConfiguredTools,
@@ -12,10 +12,17 @@ import {
 describe("OmnIA Tool Registry - Management, Access & Authentication", () => {
   it("loads default tools with clear identification when no custom tools are defined", () => {
     const tools = parseConfiguredTools({});
-    assert.equal(tools.length, 4);
+    assert.equal(tools.length, 6);
     assert.deepEqual(
       tools.map((t) => t.name),
-      ["ip_location", "call_api_endpoint", "query_graphql", "inspect_api_documentation"],
+      [
+        "ip_location",
+        "call_api_endpoint",
+        "query_graphql",
+        "inspect_api_documentation",
+        "git_intelligence",
+        "gitlab_intelligence",
+      ],
     );
     assert.ok(tools.every((t) => t.enabled === true));
   });
@@ -177,8 +184,23 @@ describe("OmnIA Tool Registry - Management, Access & Authentication", () => {
       omnia_allowed_domains: "", // Empty whitelist!
     });
     // Tools exist and are active without throwing or blocking
-    assert.equal(tools.length, 4);
+    assert.equal(tools.length, 6);
     assert.ok(tools.every((t) => t.enabled === true));
+  });
+
+  it("infers gitlab type and resolves gitlab aliases correctly", () => {
+    const yaml = `
+- name: gitlab_intelligence
+  enabled: true
+`;
+    const tools = parseConfiguredTools({ omnia_tools: yaml });
+    assert.equal(tools.length, 1);
+    assert.equal(tools[0].type, "gitlab");
+
+    const ollamaDefs = buildOllamaTools(tools) as any[];
+    assert.equal(ollamaDefs.length, 1);
+    assert.equal(ollamaDefs[0].function.name, "gitlab_intelligence");
+    assert.ok(ollamaDefs[0].function.parameters.properties.operation);
   });
 
   it("correctly parses both YAML and JSON tool definitions", () => {

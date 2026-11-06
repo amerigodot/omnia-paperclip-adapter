@@ -1,11 +1,16 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createServerAdapter } from "./index.js";
 
-describe("ollama_local adapter", () => {
+describe("omnia adapter", () => {
   const adapter = createServerAdapter();
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
 
   it("exports correct metadata and capability flags", () => {
-    expect(adapter.type).toBe("ollama_local");
+    expect(adapter.type).toBe("omnia");
     expect(adapter.supportsLocalAgentJwt).toBe(true);
     expect(adapter.supportsInstructionsBundle).toBe(true);
     expect(adapter.instructionsPathKey).toBe("instructionsFilePath");
@@ -52,32 +57,78 @@ describe("ollama_local adapter", () => {
     expect(mirostatField?.options?.length).toBe(3);
   });
 
-  it("tests environment against local Ollama", async () => {
+  it("tests environment against Ollama host", async () => {
+    globalThis.fetch = (async (input: any) => {
+      const url = String(input);
+      if (url.includes("/api/version")) {
+        return new Response(JSON.stringify({ version: "0.5.1" }), { status: 200 });
+      }
+      if (url.includes("/api/tags")) {
+        return new Response(JSON.stringify({ models: [{ name: "qwen2.5:7b" }] }), { status: 200 });
+      }
+      return new Response("OK", { status: 200 });
+    }) as any;
+
     const res = await adapter.testEnvironment({
       companyId: "company-1",
-      adapterType: "ollama_local",
+      adapterType: "omnia",
       config: { baseUrl: "http://127.0.0.1:11434" },
     });
 
-    expect(res.adapterType).toBe("ollama_local");
+    expect(res.adapterType).toBe("omnia");
     expect(res.status).toBe("pass");
     expect(res.checks.length).toBeGreaterThan(0);
-    expect(res.checks[0].code).toBe("ollama_connected");
+    expect(res.checks[0].code).toBe("omnia_connected");
   });
 
-  it("lists models dynamically from local Ollama", async () => {
+  it("lists models dynamically from Ollama", async () => {
+    globalThis.fetch = (async (input: any) => {
+      const url = String(input);
+      if (url.includes("/api/tags")) {
+        return new Response(
+          JSON.stringify({
+            models: [
+              { name: "qwen2.5:7b", details: { parameter_size: "7B" } },
+              { name: "llama3.1:8b", details: { parameter_size: "8B" } },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response("OK", { status: 200 });
+    }) as any;
+
     expect(adapter.listModels).toBeDefined();
     const models = await adapter.listModels!();
     expect(models.length).toBeGreaterThan(0);
     const ids = models.map((m) => m.id);
-    expect(ids.some((id) => id.includes("qwen") || id.includes("gemma"))).toBe(true);
+    expect(ids).toContain("qwen2.5:7b");
   });
 
   it("executes a streaming chat turn with model parameters", async () => {
+    globalThis.fetch = (async (input: any) => {
+      const url = String(input);
+      if (url.includes("/api/tags")) {
+        return new Response(JSON.stringify({ models: [{ name: "qwen2.5:3b" }] }), { status: 200 });
+      }
+      if (url.includes("/api/chat")) {
+        const streamData =
+          JSON.stringify({ message: { role: "assistant", content: "Hello test!" }, done: false }) +
+          "\n" +
+          JSON.stringify({ done: true, prompt_eval_count: 10, eval_count: 5 }) +
+          "\n";
+        return new Response(streamData, {
+          status: 200,
+          headers: { "Content-Type": "application/x-ndjson" },
+        });
+      }
+      return new Response("OK", { status: 200 });
+    }) as any;
+
     const logs: string[] = [];
     const result = await adapter.execute({
       runId: "vitest-run-1",
-      agent: { id: "agent-1", companyId: "co-1", name: "Ollama Tester", adapterType: "ollama_local", adapterConfig: {} },
+      agent: { id: "agent-1", companyId: "co-1", name: "Ollama Tester", adapterType: "omnia", adapterConfig: {} },
       runtime: { sessionId: null, sessionDisplayId: null, sessionParams: null, taskKey: null },
       config: {
         baseUrl: "http://127.0.0.1:11434",

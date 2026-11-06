@@ -9,6 +9,8 @@
   "exports": {
     ".": "./dist/index.js",
     "./server": "./dist/server/index.js",
+    "./ui": "./dist/ui/index.js",
+    "./cli": "./dist/cli/index.js",
     "./ui-parser": "./dist/ui-parser.js"
   },
   "files": [
@@ -17,13 +19,14 @@
   "scripts": {
     "build": "tsc",
     "clean": "rm -rf dist",
-    "test": "tsx --test src/server/tools/*.test.ts",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "tsx": "^4.19.0",
-    "typescript": "^7.0.2"
+    "typescript": "^5.9.3",
+    "vitest": "^3.0.0"
   },
   "engines": {
     "node": ">=24.11.0"

@@ -81,6 +81,50 @@ export {
   OMNIA_LOGO_LIGHT_DATA_URI,
 } from "./tools/omnia-icons.js";
 
+export {
+  executeGitIntelligence,
+  generateChangelog,
+  tagRangeAnalysis,
+  detectBetaFeatures,
+  inspectActiveRefactors,
+  gitSummary,
+  parseConventionalCommit,
+  parseSemver,
+  compareSemver,
+  GIT_INTELLIGENCE_TOOL_DEFINITION,
+  type GitOperation,
+  type ParsedCommit,
+  type ChangelogOptions,
+  type TagRangeOptions,
+  type DetectBetaOptions,
+  type ActiveRefactorsOptions,
+  type GitSummaryOptions,
+  type GitToolResult,
+  type BranchRefactorInfo,
+} from "./tools/git-intelligence.js";
+
+export {
+  executeGitLabIntelligence,
+  generateThreeTierChangelog,
+  fetchGitLabApi,
+  fetchProjectMetadata,
+  fetchProjectBranches,
+  fetchProjectTags,
+  fetchProjectCompare,
+  fetchProjectMergeRequests,
+  fetchProjectPipelines,
+  normalizeGitLabProjectPath,
+  mapTouchedSubsystems,
+  GITLAB_INTELLIGENCE_TOOL_DEFINITION,
+  type GitLabOperation,
+  type GitLabToolOptions,
+  type GitLabProjectMeta,
+  type GitLabBranchInfo,
+  type GitLabTagInfo,
+  type GitLabMergeRequestInfo,
+  type GitLabPipelineInfo,
+} from "./tools/gitlab-intelligence.js";
+
 export function createServerAdapter(): ServerAdapterModule {
   return {
     type,
