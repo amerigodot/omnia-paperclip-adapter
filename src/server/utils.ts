@@ -127,7 +127,7 @@ export interface ChatMessageLike {
  * Condenses historical tool outputs from earlier turns to prevent context explosion
  * and avoid remote proxy timeouts (e.g. 180s socket drop / 'terminated').
  */
-export function prunePriorToolMessages(messages: ChatMessageLike[], keepLastN = 2): void {
+export function prunePriorToolMessages(messages: ChatMessageLike[], keepLastN = 1): void {
   const toolIndices: number[] = [];
   for (let i = 0; i < messages.length; i++) {
     if (messages[i].role === "tool") {
@@ -138,8 +138,16 @@ export function prunePriorToolMessages(messages: ChatMessageLike[], keepLastN = 
   const olderIndices = toolIndices.slice(0, Math.max(0, toolIndices.length - keepLastN));
   for (const idx of olderIndices) {
     const msg = messages[idx];
-    if (typeof msg.content === "string" && msg.content.length > 1500) {
-      msg.content = msg.content.slice(0, 1500) + "\n... [Remaining data already analyzed in prior turn]";
+    if (typeof msg.content === "string" && msg.content.length > 500) {
+      msg.content = msg.content.slice(0, 500) + "\n... [Historical tool data pruned to preserve model context]";
+    }
+  }
+
+  // Also trim very verbose intermediate assistant thought / reasoning content from older turns
+  for (let i = 0; i < messages.length - 2; i++) {
+    const msg = messages[i];
+    if (msg.role === "assistant" && typeof msg.content === "string" && msg.content.length > 1500) {
+      msg.content = msg.content.slice(0, 1500) + "... [historical thought pruned]";
     }
   }
 }

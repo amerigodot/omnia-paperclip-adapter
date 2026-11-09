@@ -1070,7 +1070,6 @@ export async function executeGitLabIntelligence(
           project: targetProj,
           filePath: file,
           ref,
-          content,
           sizeBytes: Buffer.byteLength(content, "utf-8"),
         },
         executionMs: 0,

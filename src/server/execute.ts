@@ -449,14 +449,18 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       const isFirstTurn = turn === 1;
       const isFinalTurn = turn === maxTurns;
 
-      // Guarantee that messages always contains at least one non-empty user query.
-      // This protects Qwen models whose Jinja chat template raises:
-      // "ValueError: No user query found in messages" when context pruning or tool loops occur.
-      const hasUserMessage = messages.some((m) => m.role === "user" && typeof m.content === "string" && m.content.trim().length > 0);
-      if (!hasUserMessage) {
-        messages.splice(1, 0, {
+      // Guarantee that messages always contains a user query in the active context window.
+      // Qwen's Jinja chat template raises "ValueError: No user query found in messages"
+      // when context truncation by Ollama drops earlier messages from the head of the array.
+      // Checking the recent tail of messages ensures an active user turn is always within Ollama's sliding window.
+      const hasRecentUser = messages
+        .slice(-4)
+        .some((m) => m.role === "user" && typeof m.content === "string" && m.content.trim().length > 0);
+      if (!hasRecentUser) {
+        const shortPrompt = promptText.length > 300 ? `${promptText.slice(0, 300)}...` : promptText;
+        messages.push({
           role: "user",
-          content: promptText || "Analyze the tool outputs and provide a complete response.",
+          content: `Proceed with fulfilling the task: "${shortPrompt || "Analyze the tool outputs and provide a complete response."}".`,
         });
       }
 
@@ -693,15 +697,24 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         messages.push({
           role: "tool",
           name: toolName,
+          tool_name: toolName,
           content: toolResultStr,
-        });
+        } as any);
       }
 
-      // If reaching the penultimate turn, prompt the model to finalize and save its report
+      // Guarantee a fresh user continuation message after each cycle of tool results.
+      // This guarantees that Qwen's Jinja template ALWAYS finds an active user query in the active
+      // context window, even when earlier turns or the initial user message are truncated by Ollama's sliding window.
+      const taskExcerpt = promptText.length > 250 ? `${promptText.slice(0, 250)}...` : promptText;
       if (turn === maxTurns - 1) {
         messages.push({
           role: "user",
-          content: "You have gathered the necessary data. Now synthesize all findings, generate your complete structured Security Advisory Report in markdown, and save it as an artifact using `save_artifact`.",
+          content: `You have gathered the necessary data. Now synthesize all findings, generate your complete structured report in markdown, and save it as an artifact using save_artifact. Original objective: "${taskExcerpt}"`,
+        });
+      } else {
+        messages.push({
+          role: "user",
+          content: `Tool execution complete. Continue working toward the objective: "${taskExcerpt}". Review the tool outputs above, execute next tool calls if more data is needed, or provide your complete synthesis.`,
         });
       }
     }
@@ -709,6 +722,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     // If the loop terminated while the last message was a tool result,
     // invoke the model for one final synthesis pass so output is never truncated.
     if (messages[messages.length - 1]?.role === "tool") {
+      messages.push({
+        role: "user",
+        content: `Synthesize the findings above into a final response and report for the task: "${promptText}".`,
+      });
       await onLog("stdout", `[omnia] Generating final synthesis response...\n`);
       try {
         prunePriorToolMessages(messages);
