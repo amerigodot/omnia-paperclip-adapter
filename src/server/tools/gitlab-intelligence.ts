@@ -257,6 +257,16 @@ export async function fetchGitLabApi<T = any>(
     }
 
     if (res.status === 404) {
+      if (errBody.includes("invalid revision or path") || errBody.includes("Tree Not Found")) {
+        throw new Error(
+          `GitLab API 404: The specified path or revision was not found in repository. (GitLab response: ${errBody}). Note: If you requested a directory, it may not exist or may be a single file (e.g. filename.vue). Project access and token are VALID.`,
+        );
+      }
+      if (errBody.includes("File Not Found")) {
+        throw new Error(
+          `GitLab API 404: File was not found in repository under ref. (GitLab response: ${errBody}). Project access and token are VALID.`,
+        );
+      }
       throw new Error(
         `GitLab API 404 Not Found: "${urlStr}". Verify the project path and check that the token has permission to view this project.`,
       );
@@ -1051,10 +1061,33 @@ export async function executeGitLabIntelligence(
       const file = toolOptions.filePath || (args.path as string) || (args.file as string) || "";
       if (!file) throw new Error("Argument 'filePath' is required for get_file_content.");
       const ref = toolOptions.ref || toolOptions.baseBranch || "main";
-      const content = await fetchRawFile(targetProj, file, ref, gitlabToken, gitlabHost);
-      const ext = path.extname(file).replace(/^\./, "") || "text";
+      let content = "";
+      let resolvedFile = file;
+
+      try {
+        content = await fetchRawFile(targetProj, file, ref, gitlabToken, gitlabHost);
+      } catch (err) {
+        // If file doesn't have an extension, try standard extensions (.vue, .ts, .js, .json, .md)
+        if (!path.extname(file)) {
+          for (const ext of [".vue", ".ts", ".js", ".json", ".md"]) {
+            try {
+              const testFile = `${file}${ext}`;
+              content = await fetchRawFile(targetProj, testFile, ref, gitlabToken, gitlabHost);
+              resolvedFile = testFile;
+              break;
+            } catch {
+              // continue
+            }
+          }
+        }
+        if (!content) {
+          throw new Error(`File "${file}" was not found in repository "${targetProj}" on ref "${ref}". (Note: project access and token are valid). Check the exact path using list_repository_tree.`);
+        }
+      }
+
+      const ext = path.extname(resolvedFile).replace(/^\./, "") || "text";
       const md = [
-        `### 📄 File: \`${file}\` (ref: \`${ref}\`)`,
+        `### 📄 File: \`${resolvedFile}\` (ref: \`${ref}\`)`,
         "",
         `\`\`\`${ext}`,
         content,
@@ -1064,11 +1097,11 @@ export async function executeGitLabIntelligence(
         operation: "get_file_content",
         success: true,
         repo: String(targetProj),
-        summary: `Fetched file ${file} (${content.length} chars) from ref ${ref}.`,
+        summary: `Fetched file ${resolvedFile} (${content.length} chars) from ref ${ref}.`,
         markdown: md,
         data: {
           project: targetProj,
-          filePath: file,
+          filePath: resolvedFile,
           ref,
           sizeBytes: Buffer.byteLength(content, "utf-8"),
         },
@@ -1086,7 +1119,57 @@ export async function executeGitLabIntelligence(
       const ref = toolOptions.ref || toolOptions.baseBranch || "main";
       const treePath = toolOptions.path || (args.subpath as string) || undefined;
       const recursive = toolOptions.recursive !== false;
-      const items = await fetchProjectTree(targetProj, treePath, ref, recursive, gitlabToken, gitlabHost);
+
+      let items: GitLabTreeItem[] = [];
+      try {
+        items = await fetchProjectTree(targetProj, treePath, ref, recursive, gitlabToken, gitlabHost);
+      } catch (err) {
+        // If directory was not found (404), check if the path is actually a file (e.g. pages/privacy -> pages/privacy.vue)
+        if (treePath) {
+          const testExts = ["", ".vue", ".ts", ".js", ".json", ".md"];
+          for (const ext of testExts) {
+            try {
+              const testFile = `${treePath}${ext}`;
+              const content = await fetchRawFile(targetProj, testFile, ref, gitlabToken, gitlabHost);
+              if (content) {
+                const fileExt = path.extname(testFile).replace(/^\./, "") || "text";
+                return {
+                  operation: "get_file_content",
+                  success: true,
+                  repo: String(targetProj),
+                  summary: `Path "${treePath}" is a file ("${testFile}", ${content.length} chars), not a directory.`,
+                  markdown: `### 📄 File: \`${testFile}\` (ref: \`${ref}\`)\n\n*(Note: '${treePath}' was requested as a directory tree, but resolved as file '${testFile}')*\n\n\`\`\`${fileExt}\n${content}\n\`\`\``,
+                  data: {
+                    project: targetProj,
+                    filePath: testFile,
+                    ref,
+                    sizeBytes: Buffer.byteLength(content, "utf-8"),
+                  },
+                  executionMs: 0,
+                };
+              }
+            } catch {
+              // try next
+            }
+          }
+        }
+        // If not a file either, return a non-fatal empty tree response with clear guidance
+        const lines = [
+          `# 📂 Repository Tree: \`${targetProj}\` (ref: \`${ref}\`${treePath ? `, path: \`${treePath}\`` : ""})`,
+          "",
+          `*Nessun elemento trovato per il percorso \`${treePath || "root"}\` sul branch \`${ref}\`.*`,
+          `*(Nota: l'accesso al repository e il token sono validi. Verifica se il percorso cercato è un file singolo anziché una directory).*`,
+        ];
+        return {
+          operation: "list_repository_tree",
+          success: true,
+          repo: String(targetProj),
+          summary: `Directory path "${treePath}" was not found or is empty (project access is valid).`,
+          markdown: lines.join("\n"),
+          data: [],
+          executionMs: 0,
+        };
+      }
       const lines = [
         `# 📂 Repository Tree: \`${targetProj}\` (ref: \`${ref}\`${treePath ? `, path: \`${treePath}\`` : ""})`,
         "",

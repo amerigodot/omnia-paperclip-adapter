@@ -389,20 +389,20 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
     defaultAgentGuidance =
       "You are an autonomous AI worker executing tasks in Paperclip with the OmnIA tool engine.\n" +
-      "- Your goal is to fulfill the user's request accurately, directly, and thoughtfully.\n" +
+      "- Your goal is to fulfill the user's request accurately, directly, and thoroughly.\n" +
       `- You have access to the following ${enabledTools.length} enabled tool(s):\n${toolListSummary}\n` +
       "- When external data or operations are required, invoke the appropriate tool with explicit call parameters.\n" +
       "- Once a tool returns the result, analyze, synthesize, and elaborate the data clearly to formulate a complete, conversational response in the language of the prompt (do not just dump raw JSON).\n" +
-      "- When creating comprehensive reports, security audits, git changelogs, beta feature analysis, or persistent documentation, use the `save_artifact` tool to store the report as a persistent Paperclip artifact/document.";
+      "- When creating comprehensive reports, security audits, git changelogs, translations, or persistent documentation, use the `save_artifact` tool to store the deliverables as a persistent Paperclip artifact/document.\n" +
+      "- EXECUTION DIRECTIVES:\n" +
+      "  1. PERFORM THE TASK DIRECTLY: Never respond with generic tutorials, hypothetical instructions, or advice on how the user could perform the task manually (e.g. do not just explain how to set up i18n or how to translate). Execute the requested translations, code changes, or audits directly and provide the completed work.\n" +
+      "  2. RESILIENT TOOL USAGE: If a tool returns a 404 or path not found for a specific directory or file, this does not mean your access or token is invalid. Auto-check alternative file paths/extensions (e.g. .vue, .ts, .json), and continue processing all other valid files or resources to finish the job.\n" +
+      "  3. SAVE DELIVERABLES AS ARTIFACTS: When assigned tasks that produce documents, translation sets, or code audits, make sure to save the final deliverable via `save_artifact`.";
   }
 
   systemPrompt = systemPrompt
     ? `${systemPrompt}\n\n---\n${defaultAgentGuidance}`
     : defaultAgentGuidance;
-
-  const messages: OllamaChatMessage[] = [];
-  messages.push({ role: "system", content: systemPrompt });
-  messages.push({ role: "user", content: promptText });
 
   // 3. Prepare request payload and tools with OmnIA suite
   const tools: unknown[] = buildOllamaTools(configuredTools);
@@ -430,6 +430,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     const graphqlNote = `\n## Pre-configured GraphQL Endpoint\nEndpoint URL: \`${graphqlEndpointUrl}\`. Use the \`query_graphql\` tool to query/mutate data or \`inspect_api_documentation\` to explore schema.`;
     systemPrompt = systemPrompt ? `${systemPrompt}\n\n---\n${graphqlNote}` : graphqlNote;
   }
+
+  const messages: OllamaChatMessage[] = [];
+  messages.push({ role: "system", content: systemPrompt });
+  messages.push({ role: "user", content: promptText });
 
   const toolNames = tools.map((t: any) => t.function?.name || "tool").join(", ");
 

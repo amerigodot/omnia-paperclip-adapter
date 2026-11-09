@@ -93,7 +93,7 @@ export function isStructuredMarkdownReport(text: string): boolean {
   if (!text || text.length < 100) return false;
   const hasHeaders = /^#{1,3}\s+/m.test(text);
   const hasTables = /\|[^\n]+\|\n\|[-:\s|]+\|/m.test(text);
-  const hasReportKeywords = /(?:Security|Advisory|Audit|Vulnerability|Report|Rapporto|Analisi|Findings|CVE|Overview|Raccomandazioni|Summary)/i.test(text);
+  const hasReportKeywords = /(?:Security|Advisory|Audit|Vulnerability|Report|Rapporto|Analisi|Findings|CVE|Overview|Raccomandazioni|Summary|Translation|Traduzione|i18n|Localization|Localizzazione|Deliverable|Changelog)/i.test(text);
   return (hasHeaders || hasTables) && hasReportKeywords;
 }
 
