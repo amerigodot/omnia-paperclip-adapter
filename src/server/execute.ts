@@ -446,7 +446,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     let finalAssistantText = "";
     let artifactSaved = false;
     let turn = 0;
-    const maxTurns = asNumber(effectiveConfig.max_turns, 10);
+    const maxTurns = asNumber(effectiveConfig.max_turns, 25);
 
     while (turn < maxTurns) {
       turn++;
@@ -460,7 +460,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       const hasRecentUser = messages
         .slice(-4)
         .some((m) => m.role === "user" && typeof m.content === "string" && m.content.trim().length > 0);
-      if (!hasRecentUser) {
+      if (isFinalTurn) {
+        messages.push({
+          role: "user",
+          content: `CRITICAL: You have reached your FINAL turn for task "${promptText}". Do NOT call file discovery tools. Immediately provide the complete translations/deliverables for all files examined and save them using the save_artifact tool now.`,
+        });
+      } else if (!hasRecentUser) {
         const shortPrompt = promptText.length > 300 ? `${promptText.slice(0, 300)}...` : promptText;
         messages.push({
           role: "user",
@@ -728,7 +733,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     if (messages[messages.length - 1]?.role === "tool") {
       messages.push({
         role: "user",
-        content: `Synthesize the findings above into a final response and report for the task: "${promptText}".`,
+        content: `Turn limit reached for task: "${promptText}". Synthesize all findings and data retrieved above into a COMPLETE deliverable now. Do NOT state that you will fetch more files later. Save the result with save_artifact or provide the complete structured deliverable immediately.`,
       });
       await onLog("stdout", `[omnia] Generating final synthesis response...\n`);
       try {
@@ -845,7 +850,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
     // Automatically transition issue status to 'done' when substantive output was produced.
     // This prevents Paperclip's recovery worker from triggering retry cascades (disposition_repair).
-    if (issueId && finalAssistantText.trim()) {
+    // Ensure we do not prematurely mark as done if output is an interlocutory phrase or if no artifact was saved
+    const isInterlocutory = /^(Now let me|I will now|Procedo a|Let me fetch|Wait|I am going to)/i.test(finalAssistantText.trim());
+    const isSubstantive = artifactSaved || (finalAssistantText.trim().length >= 150 && !isInterlocutory);
+
+    if (issueId && isSubstantive) {
       try {
         const marked = await markIssueDone({
           issueId,
